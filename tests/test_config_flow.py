@@ -12,11 +12,11 @@ from homeassistant.const import CONF_HOST, CONF_PORT
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 
-from custom_components.hisense_tv.config_flow import (
+from custom_components.vidaa_tv.config_flow import (
     CannotConnect,
     VidaaTVConfigFlow,
 )
-from custom_components.hisense_tv.const import (
+from custom_components.vidaa_tv.const import (
     CONF_BRAND,
     CONF_CERTFILE,
     CONF_DEVICE_ID,
@@ -85,7 +85,7 @@ async def test_user_flow_cannot_connect(
 ) -> None:
     """Test user flow when TV connection fails."""
     with patch(
-        "custom_components.hisense_tv.config_flow.validate_connection",
+        "custom_components.vidaa_tv.config_flow.validate_connection",
         side_effect=CannotConnect("Connection failed"),
     ):
         result = await hass.config_entries.flow.async_init(
@@ -140,7 +140,7 @@ async def test_pair_flow_persists_discovered_brand(
     """A non-Hisense brand from the UPnP probe is persisted to the entry."""
     mock_config_flow_tv  # AsyncVidaaTV mock is active via fixture
     with patch(
-        "custom_components.hisense_tv.config_flow.probe_ip",
+        "custom_components.vidaa_tv.config_flow.probe_ip",
         return_value=MagicMock(brand="tpv", mac="00:11:22:33:44:55"),
     ):
         result = await hass.config_entries.flow.async_init(
@@ -191,7 +191,7 @@ async def test_pair_flow_invalid_pin(
 
 async def test_options_flow(
     hass: HomeAssistant,
-    mock_hisense_tv: MagicMock,
+    mock_vidaa_tv: MagicMock,
 ) -> None:
     """Test options flow."""
     entry = create_mock_config_entry(hass)
@@ -286,7 +286,7 @@ def _create_ssdp_discovery_info(
     )
 
 
-async def test_ssdp_discovery_valid_hisense_tv(
+async def test_ssdp_discovery_valid_vidaa_tv(
     hass: HomeAssistant,
     mock_config_flow_tv: MagicMock,
     mock_certs_exist: MagicMock,
@@ -340,7 +340,7 @@ async def test_ssdp_discovery_captures_brand_from_descriptor(
     assert result["data"][CONF_BRAND] == "tpv"
 
 
-async def test_ssdp_discovery_not_hisense_tv(
+async def test_ssdp_discovery_not_vidaa_tv(
     hass: HomeAssistant,
 ) -> None:
     """Test SSDP discovery with non-Hisense device."""
@@ -356,7 +356,7 @@ async def test_ssdp_discovery_not_hisense_tv(
     )
 
     assert result["type"] == FlowResultType.ABORT
-    assert result["reason"] == "not_hisense_tv"
+    assert result["reason"] == "not_vidaa_tv"
 
 
 async def test_ssdp_discovery_no_host(

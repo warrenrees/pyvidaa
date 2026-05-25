@@ -9,12 +9,12 @@ import pytest
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
 
-from custom_components.hisense_tv import (
+from custom_components.vidaa_tv import (
     async_setup,
     async_setup_entry,
     async_unload_entry,
 )
-from custom_components.hisense_tv.const import DOMAIN
+from custom_components.vidaa_tv.const import DOMAIN
 
 from .conftest import MOCK_CONFIG_ENTRY_DATA, create_mock_config_entry
 
@@ -30,15 +30,15 @@ async def test_async_setup(hass: HomeAssistant) -> None:
 
 async def test_async_setup_entry_success(
     hass: HomeAssistant,
-    mock_hisense_tv: MagicMock,
+    mock_vidaa_tv: MagicMock,
 ) -> None:
     """Test successful entry setup."""
     entry = create_mock_config_entry(hass)
     entry.add_to_hass(hass)
 
     with patch(
-        "custom_components.hisense_tv.AsyncVidaaTV",
-        return_value=mock_hisense_tv,
+        "custom_components.vidaa_tv.AsyncVidaaTV",
+        return_value=mock_vidaa_tv,
     ):
         # Use the proper setup mechanism
         await hass.config_entries.async_setup(entry.entry_id)
@@ -51,15 +51,15 @@ async def test_async_setup_entry_success(
 
 async def test_async_setup_entry_connection_failed(
     hass: HomeAssistant,
-    mock_hisense_tv_offline: MagicMock,
+    mock_vidaa_tv_offline: MagicMock,
 ) -> None:
     """Test entry setup when TV connection fails."""
     entry = create_mock_config_entry(hass)
     entry.add_to_hass(hass)
 
     with patch(
-        "custom_components.hisense_tv.AsyncVidaaTV",
-        return_value=mock_hisense_tv_offline,
+        "custom_components.vidaa_tv.AsyncVidaaTV",
+        return_value=mock_vidaa_tv_offline,
     ):
         await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
@@ -71,15 +71,15 @@ async def test_async_setup_entry_connection_failed(
 
 async def test_async_unload_entry(
     hass: HomeAssistant,
-    mock_hisense_tv: MagicMock,
+    mock_vidaa_tv: MagicMock,
 ) -> None:
     """Test entry unload."""
     entry = create_mock_config_entry(hass)
     entry.add_to_hass(hass)
 
     with patch(
-        "custom_components.hisense_tv.AsyncVidaaTV",
-        return_value=mock_hisense_tv,
+        "custom_components.vidaa_tv.AsyncVidaaTV",
+        return_value=mock_vidaa_tv,
     ):
         await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
@@ -88,12 +88,12 @@ async def test_async_unload_entry(
     await hass.async_block_till_done()
 
     assert result is True
-    mock_hisense_tv.async_disconnect.assert_called_once()
+    mock_vidaa_tv.async_disconnect.assert_called_once()
 
 
 async def test_send_key_service(
     hass: HomeAssistant,
-    mock_hisense_tv: MagicMock,
+    mock_vidaa_tv: MagicMock,
 ) -> None:
     """Test send_key service executes without error."""
     # Setup integration
@@ -103,8 +103,8 @@ async def test_send_key_service(
     entry.add_to_hass(hass)
 
     with patch(
-        "custom_components.hisense_tv.AsyncVidaaTV",
-        return_value=mock_hisense_tv,
+        "custom_components.vidaa_tv.AsyncVidaaTV",
+        return_value=mock_vidaa_tv,
     ):
         await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
@@ -123,7 +123,7 @@ async def test_send_key_service(
 
 async def test_launch_app_service(
     hass: HomeAssistant,
-    mock_hisense_tv: MagicMock,
+    mock_vidaa_tv: MagicMock,
 ) -> None:
     """Test launch_app service executes without error."""
     # Setup integration
@@ -133,8 +133,8 @@ async def test_launch_app_service(
     entry.add_to_hass(hass)
 
     with patch(
-        "custom_components.hisense_tv.AsyncVidaaTV",
-        return_value=mock_hisense_tv,
+        "custom_components.vidaa_tv.AsyncVidaaTV",
+        return_value=mock_vidaa_tv,
     ):
         await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()

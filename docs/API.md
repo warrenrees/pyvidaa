@@ -1,6 +1,6 @@
 # API Reference
 
-This document provides a reference for the `hisense_tv` Python library.
+This document provides a reference for the `pyvidaa` Python library.
 
 ## Installation
 
@@ -410,7 +410,7 @@ AuthMethod.MODERN   # Protocol >= 3290
 
 ### `load_config()` / `save_config(config)`
 
-Load/save configuration from `~/.config/hisense_tv/config.json`.
+Load/save configuration from `~/.config/pyvidaa/config.json`.
 
 ```python
 from pyvidaa import load_config, save_config, set_tv_ip
@@ -461,5 +461,5 @@ import logging
 logging.basicConfig(level=logging.DEBUG)
 
 # Or configure specific logger
-logging.getLogger("hisense_tv").setLevel(logging.DEBUG)
+logging.getLogger("pyvidaa").setLevel(logging.DEBUG)
 ```

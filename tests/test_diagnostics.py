@@ -8,8 +8,8 @@ import pytest
 
 from homeassistant.core import HomeAssistant
 
-from custom_components.hisense_tv.const import DOMAIN
-from custom_components.hisense_tv.diagnostics import (
+from custom_components.vidaa_tv.const import DOMAIN
+from custom_components.vidaa_tv.diagnostics import (
     TO_REDACT,
     async_get_config_entry_diagnostics,
 )
@@ -19,15 +19,15 @@ from .conftest import MOCK_CONFIG_ENTRY_DATA, MOCK_DEVICE_INFO, create_mock_conf
 
 async def test_diagnostics(
     hass: HomeAssistant,
-    mock_hisense_tv: MagicMock,
+    mock_vidaa_tv: MagicMock,
 ) -> None:
     """Test diagnostics output."""
     entry = create_mock_config_entry(hass, options={"scan_interval": 30})
     entry.add_to_hass(hass)
 
     with patch(
-        "custom_components.hisense_tv.AsyncVidaaTV",
-        return_value=mock_hisense_tv,
+        "custom_components.vidaa_tv.AsyncVidaaTV",
+        return_value=mock_vidaa_tv,
     ):
         await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
@@ -59,17 +59,17 @@ async def test_diagnostics(
 
 async def test_diagnostics_tv_offline(
     hass: HomeAssistant,
-    mock_hisense_tv: MagicMock,
+    mock_vidaa_tv: MagicMock,
 ) -> None:
     """Test diagnostics when TV is offline."""
-    mock_hisense_tv.is_connected = False
+    mock_vidaa_tv.is_connected = False
 
     entry = create_mock_config_entry(hass)
     entry.add_to_hass(hass)
 
     with patch(
-        "custom_components.hisense_tv.AsyncVidaaTV",
-        return_value=mock_hisense_tv,
+        "custom_components.vidaa_tv.AsyncVidaaTV",
+        return_value=mock_vidaa_tv,
     ):
         await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()

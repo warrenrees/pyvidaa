@@ -29,7 +29,7 @@ Control your Hisense/Vidaa Smart TV from Home Assistant!
 
 **Launch Netflix:**
 ```yaml
-service: hisense_tv.launch_app
+service: vidaa_tv.launch_app
 data:
   app: netflix
 ```
@@ -45,4 +45,4 @@ data:
 
 ## Documentation
 
-See the [full documentation](https://github.com/warrenrees/pyvidaa/blob/main/custom_components/hisense_tv/README.md) for detailed setup and configuration options.
+See the [full documentation](https://github.com/warrenrees/pyvidaa/blob/main/custom_components/vidaa_tv/README.md) for detailed setup and configuration options.

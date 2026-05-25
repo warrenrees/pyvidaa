@@ -12,13 +12,13 @@ from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import issue_registry as ir
 
-from custom_components.hisense_tv.const import (
+from custom_components.vidaa_tv.const import (
     DEFAULT_CERT_DIR,
     DEFAULT_CERT_FILENAME,
     DEFAULT_KEY_FILENAME,
     DOMAIN,
 )
-from custom_components.hisense_tv.repairs import (
+from custom_components.vidaa_tv.repairs import (
     CertificateMissingRepairFlow,
     ConnectionFailedRepairFlow,
     async_create_fix_flow,

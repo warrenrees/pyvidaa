@@ -3,7 +3,7 @@ send_key:
   description: Send a remote key press to the TV.
   target:
     entity:
-      integration: hisense_tv
+      integration: vidaa_tv
       domain: remote
   fields:
     key:
@@ -19,7 +19,7 @@ launch_app:
   description: Launch an application on the TV.
   target:
     entity:
-      integration: hisense_tv
+      integration: vidaa_tv
       domain: media_player
   fields:
     app:

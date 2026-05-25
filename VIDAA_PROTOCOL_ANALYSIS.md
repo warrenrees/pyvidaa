@@ -472,7 +472,7 @@ Payload: {"authNum":"1234"}
 | `pair_new_client.py` | Pair new UUID with TV |
 | `capture_pairing.py` | Debug/capture MQTT traffic |
 | `test_connection.py` | Test TV connectivity |
-| `hisense_tv/credentials.py` | Credential generation |
+| `pyvidaa/credentials.py` | Credential generation |
 | `certs/fresh_cert.pem` | Client certificate |
 | `certs/fresh_key.pem` | Client private key |
 

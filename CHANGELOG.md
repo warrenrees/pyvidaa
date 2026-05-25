@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Renamed the Home Assistant integration domain `hisense_tv` → `vidaa_tv` and the
+  display name to "Vidaa TV" (existing installs must be removed and re-added).
+- The Home Assistant integration now lives in its own repository, `ha_vidaa_tv`;
+  this repository is now the `pyvidaa` library and the `hisense2mqtt` bridge.
+
 ## [2.1.0] - 2026-05-25
 
 ### Changed

@@ -14,7 +14,7 @@ from homeassistant.setup import async_setup_component
 # Enable pytest-homeassistant-custom-component
 pytest_plugins = ["pytest_homeassistant_custom_component"]
 
-from custom_components.hisense_tv.const import (
+from custom_components.vidaa_tv.const import (
     CONF_CERTFILE,
     CONF_DEVICE_ID,
     CONF_KEYFILE,
@@ -89,7 +89,7 @@ MOCK_CONFIG_ENTRY_DATA = {
 
 
 @pytest.fixture
-def mock_hisense_tv() -> Generator[MagicMock, None, None]:
+def mock_vidaa_tv() -> Generator[MagicMock, None, None]:
     """Create a mock AsyncVidaaTV client instance."""
     mock_instance = MagicMock()
 
@@ -155,7 +155,7 @@ def mock_hisense_tv() -> Generator[MagicMock, None, None]:
 
 
 @pytest.fixture
-def mock_hisense_tv_offline() -> Generator[MagicMock, None, None]:
+def mock_vidaa_tv_offline() -> Generator[MagicMock, None, None]:
     """Create a mock AsyncVidaaTV client that fails to connect."""
     mock_instance = MagicMock()
     mock_instance.async_connect = AsyncMock(return_value=False)
@@ -172,9 +172,9 @@ def mock_config_flow_tv() -> Generator[MagicMock, None, None]:
     probe_device.brand = "his"
     probe_device.mac = "00:11:22:33:44:55"
     with patch(
-        "custom_components.hisense_tv.config_flow.AsyncVidaaTV", autospec=True
+        "custom_components.vidaa_tv.config_flow.AsyncVidaaTV", autospec=True
     ) as mock_class, patch(
-        "custom_components.hisense_tv.config_flow.probe_ip",
+        "custom_components.vidaa_tv.config_flow.probe_ip",
         return_value=probe_device,
     ):
         mock_instance = mock_class.return_value
@@ -195,7 +195,7 @@ def mock_config_flow_tv() -> Generator[MagicMock, None, None]:
 def mock_certs_exist() -> Generator[MagicMock, None, None]:
     """Mock certificate files existing."""
     with patch(
-        "custom_components.hisense_tv.config_flow.check_certs_exist",
+        "custom_components.vidaa_tv.config_flow.check_certs_exist",
         return_value=True,
     ) as mock:
         yield mock
@@ -205,7 +205,7 @@ def mock_certs_exist() -> Generator[MagicMock, None, None]:
 def mock_certs_not_exist() -> Generator[MagicMock, None, None]:
     """Mock certificate files not existing."""
     with patch(
-        "custom_components.hisense_tv.config_flow.check_certs_exist",
+        "custom_components.vidaa_tv.config_flow.check_certs_exist",
         return_value=False,
     ) as mock:
         yield mock
@@ -215,7 +215,7 @@ def mock_certs_not_exist() -> Generator[MagicMock, None, None]:
 def mock_setup_entry() -> Generator[AsyncMock, None, None]:
     """Mock async_setup_entry."""
     with patch(
-        "custom_components.hisense_tv.async_setup_entry",
+        "custom_components.vidaa_tv.async_setup_entry",
         return_value=True,
     ) as mock:
         yield mock
@@ -224,5 +224,5 @@ def mock_setup_entry() -> Generator[AsyncMock, None, None]:
 @pytest.fixture
 def mock_wake_tv() -> Generator[MagicMock, None, None]:
     """Mock wake_tv WoL function."""
-    with patch("custom_components.hisense_tv.coordinator.wake_tv") as mock:
+    with patch("custom_components.vidaa_tv.coordinator.wake_tv") as mock:
         yield mock

@@ -2,19 +2,19 @@
 #
 # Prerequisites:
 # 1. Install android-tv-card from HACS (https://github.com/Nerwyn/android-tv-card)
-# 2. Replace 'remote.hisense_tv_remote' with your actual remote entity ID
+# 2. Replace 'remote.vidaa_tv_remote' with your actual remote entity ID
 #
 # Add this to your Lovelace dashboard via:
 # - UI: Edit Dashboard -> Add Card -> Manual -> paste YAML
 # - YAML mode: Add to your lovelace configuration
 
 type: custom:android-tv-card
-remote_id: remote.hisense_tv_remote
+remote_id: remote.vidaa_tv_remote
 # Optional: for power state and volume display
-# media_player_id: media_player.hisense_tv
+# media_player_id: media_player.vidaa_tv
 
 # Slider for volume (optional)
-# slider_id: media_player.hisense_tv
+# slider_id: media_player.vidaa_tv
 
 rows:
   - - power
@@ -44,7 +44,7 @@ custom_actions:
       action: perform-action
       perform_action: remote.send_command
       target:
-        entity_id: remote.hisense_tv_remote
+        entity_id: remote.vidaa_tv_remote
       data:
         command: power
 
@@ -54,7 +54,7 @@ custom_actions:
       action: perform-action
       perform_action: remote.send_command
       target:
-        entity_id: remote.hisense_tv_remote
+        entity_id: remote.vidaa_tv_remote
       data:
         command: menu
 
@@ -62,7 +62,7 @@ custom_actions:
     icon: mdi:netflix
     tap_action:
       action: perform-action
-      perform_action: hisense_tv.launch_app
+      perform_action: vidaa_tv.launch_app
       data:
         app: netflix
 
@@ -70,7 +70,7 @@ custom_actions:
     icon: mdi:youtube
     tap_action:
       action: perform-action
-      perform_action: hisense_tv.launch_app
+      perform_action: vidaa_tv.launch_app
       data:
         app: youtube
 
@@ -78,7 +78,7 @@ custom_actions:
     icon: mdi:amazon
     tap_action:
       action: perform-action
-      perform_action: hisense_tv.launch_app
+      perform_action: vidaa_tv.launch_app
       data:
         app: amazon
 
@@ -88,7 +88,7 @@ custom_actions:
       action: perform-action
       perform_action: remote.send_command
       target:
-        entity_id: remote.hisense_tv_remote
+        entity_id: remote.vidaa_tv_remote
       data:
         command: back
 
@@ -98,7 +98,7 @@ custom_actions:
       action: perform-action
       perform_action: remote.send_command
       target:
-        entity_id: remote.hisense_tv_remote
+        entity_id: remote.vidaa_tv_remote
       data:
         command: home
 
@@ -108,7 +108,7 @@ custom_actions:
       action: perform-action
       perform_action: remote.send_command
       target:
-        entity_id: remote.hisense_tv_remote
+        entity_id: remote.vidaa_tv_remote
       data:
         command: menu
 
@@ -117,7 +117,7 @@ custom_actions:
       action: perform-action
       perform_action: remote.send_command
       target:
-        entity_id: remote.hisense_tv_remote
+        entity_id: remote.vidaa_tv_remote
       data:
         command: up
 
@@ -126,7 +126,7 @@ custom_actions:
       action: perform-action
       perform_action: remote.send_command
       target:
-        entity_id: remote.hisense_tv_remote
+        entity_id: remote.vidaa_tv_remote
       data:
         command: down
 
@@ -135,7 +135,7 @@ custom_actions:
       action: perform-action
       perform_action: remote.send_command
       target:
-        entity_id: remote.hisense_tv_remote
+        entity_id: remote.vidaa_tv_remote
       data:
         command: left
 
@@ -144,7 +144,7 @@ custom_actions:
       action: perform-action
       perform_action: remote.send_command
       target:
-        entity_id: remote.hisense_tv_remote
+        entity_id: remote.vidaa_tv_remote
       data:
         command: right
 
@@ -153,7 +153,7 @@ custom_actions:
       action: perform-action
       perform_action: remote.send_command
       target:
-        entity_id: remote.hisense_tv_remote
+        entity_id: remote.vidaa_tv_remote
       data:
         command: ok
 
@@ -162,7 +162,7 @@ custom_actions:
       action: perform-action
       perform_action: remote.send_command
       target:
-        entity_id: remote.hisense_tv_remote
+        entity_id: remote.vidaa_tv_remote
       data:
         command: volumeup
 
@@ -171,7 +171,7 @@ custom_actions:
       action: perform-action
       perform_action: remote.send_command
       target:
-        entity_id: remote.hisense_tv_remote
+        entity_id: remote.vidaa_tv_remote
       data:
         command: volumedown
 
@@ -180,7 +180,7 @@ custom_actions:
       action: perform-action
       perform_action: remote.send_command
       target:
-        entity_id: remote.hisense_tv_remote
+        entity_id: remote.vidaa_tv_remote
       data:
         command: mute
 
@@ -190,7 +190,7 @@ custom_actions:
       action: perform-action
       perform_action: remote.send_command
       target:
-        entity_id: remote.hisense_tv_remote
+        entity_id: remote.vidaa_tv_remote
       data:
         command: channelup
 
@@ -200,7 +200,7 @@ custom_actions:
       action: perform-action
       perform_action: remote.send_command
       target:
-        entity_id: remote.hisense_tv_remote
+        entity_id: remote.vidaa_tv_remote
       data:
         command: channeldown
 
@@ -210,7 +210,7 @@ custom_actions:
       action: perform-action
       perform_action: remote.send_command
       target:
-        entity_id: remote.hisense_tv_remote
+        entity_id: remote.vidaa_tv_remote
       data:
         command: "0"
   n1:
@@ -218,7 +218,7 @@ custom_actions:
       action: perform-action
       perform_action: remote.send_command
       target:
-        entity_id: remote.hisense_tv_remote
+        entity_id: remote.vidaa_tv_remote
       data:
         command: "1"
   n2:
@@ -226,7 +226,7 @@ custom_actions:
       action: perform-action
       perform_action: remote.send_command
       target:
-        entity_id: remote.hisense_tv_remote
+        entity_id: remote.vidaa_tv_remote
       data:
         command: "2"
   n3:
@@ -234,7 +234,7 @@ custom_actions:
       action: perform-action
       perform_action: remote.send_command
       target:
-        entity_id: remote.hisense_tv_remote
+        entity_id: remote.vidaa_tv_remote
       data:
         command: "3"
   n4:
@@ -242,7 +242,7 @@ custom_actions:
       action: perform-action
       perform_action: remote.send_command
       target:
-        entity_id: remote.hisense_tv_remote
+        entity_id: remote.vidaa_tv_remote
       data:
         command: "4"
   n5:
@@ -250,7 +250,7 @@ custom_actions:
       action: perform-action
       perform_action: remote.send_command
       target:
-        entity_id: remote.hisense_tv_remote
+        entity_id: remote.vidaa_tv_remote
       data:
         command: "5"
   n6:
@@ -258,7 +258,7 @@ custom_actions:
       action: perform-action
       perform_action: remote.send_command
       target:
-        entity_id: remote.hisense_tv_remote
+        entity_id: remote.vidaa_tv_remote
       data:
         command: "6"
   n7:
@@ -266,7 +266,7 @@ custom_actions:
       action: perform-action
       perform_action: remote.send_command
       target:
-        entity_id: remote.hisense_tv_remote
+        entity_id: remote.vidaa_tv_remote
       data:
         command: "7"
   n8:
@@ -274,7 +274,7 @@ custom_actions:
       action: perform-action
       perform_action: remote.send_command
       target:
-        entity_id: remote.hisense_tv_remote
+        entity_id: remote.vidaa_tv_remote
       data:
         command: "8"
   n9:
@@ -282,7 +282,7 @@ custom_actions:
       action: perform-action
       perform_action: remote.send_command
       target:
-        entity_id: remote.hisense_tv_remote
+        entity_id: remote.vidaa_tv_remote
       data:
         command: "9"
 
@@ -296,7 +296,7 @@ custom_actions:
       action: perform-action
       perform_action: remote.send_command
       target:
-        entity_id: remote.hisense_tv_remote
+        entity_id: remote.vidaa_tv_remote
       data:
         command: red
 
@@ -309,7 +309,7 @@ custom_actions:
       action: perform-action
       perform_action: remote.send_command
       target:
-        entity_id: remote.hisense_tv_remote
+        entity_id: remote.vidaa_tv_remote
       data:
         command: green
 
@@ -322,7 +322,7 @@ custom_actions:
       action: perform-action
       perform_action: remote.send_command
       target:
-        entity_id: remote.hisense_tv_remote
+        entity_id: remote.vidaa_tv_remote
       data:
         command: yellow
 
@@ -335,7 +335,7 @@ custom_actions:
       action: perform-action
       perform_action: remote.send_command
       target:
-        entity_id: remote.hisense_tv_remote
+        entity_id: remote.vidaa_tv_remote
       data:
         command: blue
 

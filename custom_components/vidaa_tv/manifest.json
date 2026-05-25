@@ -1,6 +1,6 @@
 {
-  "domain": "hisense_tv",
-  "name": "Hisense TV",
+  "domain": "vidaa_tv",
+  "name": "Vidaa TV",
   "codeowners": ["@warrenrees"],
   "config_flow": true,
   "dependencies": [],

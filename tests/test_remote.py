@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from custom_components.hisense_tv.const import ACTIVITY_HOME
-from custom_components.hisense_tv.remote import VidaaTVRemote
+from custom_components.vidaa_tv.const import ACTIVITY_HOME
+from custom_components.vidaa_tv.remote import VidaaTVRemote
 
 
 def _make_remote(data: dict | None) -> VidaaTVRemote:

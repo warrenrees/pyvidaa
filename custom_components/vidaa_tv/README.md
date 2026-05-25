@@ -41,7 +41,7 @@ This integration supports Hisense and Vidaa Smart TVs that use MQTT for remote c
 ### Manual Installation
 
 1. Download the latest release from [GitHub](https://github.com/warrenrees/pyvidaa/releases)
-2. Extract the `custom_components/hisense_tv` folder
+2. Extract the `custom_components/vidaa_tv` folder
 3. Copy it to your Home Assistant's `custom_components` directory
 4. Restart Home Assistant
 
@@ -122,12 +122,12 @@ You can also use the raw key codes (e.g., `KEY_POWER`, `KEY_VOLUMEUP`).
 
 ## Services
 
-### hisense_tv.send_key
+### vidaa_tv.send_key
 
 Send a remote key press to the TV.
 
 ```yaml
-service: hisense_tv.send_key
+service: vidaa_tv.send_key
 data:
   key: KEY_OK
 ```
@@ -136,12 +136,12 @@ data:
 |-----------|------|----------|-------------|
 | `key` | string | Yes | Key code to send (e.g., `KEY_POWER`, `KEY_UP`) |
 
-### hisense_tv.launch_app
+### vidaa_tv.launch_app
 
 Launch an application on the TV.
 
 ```yaml
-service: hisense_tv.launch_app
+service: vidaa_tv.launch_app
 data:
   app: netflix
 ```
@@ -177,7 +177,7 @@ automation:
         type: button_short_press
         subtype: button_1
     action:
-      - service: hisense_tv.launch_app
+      - service: vidaa_tv.launch_app
         data:
           app: netflix
 ```
@@ -241,7 +241,7 @@ cards:
     icon: mdi:netflix
     tap_action:
       action: call-service
-      service: hisense_tv.launch_app
+      service: vidaa_tv.launch_app
       data:
         app: netflix
   - type: button
@@ -249,7 +249,7 @@ cards:
     icon: mdi:youtube
     tap_action:
       action: call-service
-      service: hisense_tv.launch_app
+      service: vidaa_tv.launch_app
       data:
         app: youtube
   - type: button
@@ -257,7 +257,7 @@ cards:
     icon: mdi:amazon
     tap_action:
       action: call-service
-      service: hisense_tv.launch_app
+      service: vidaa_tv.launch_app
       data:
         app: amazon
 ```
@@ -315,8 +315,8 @@ Enable debug logging for more detailed information:
 logger:
   default: info
   logs:
-    custom_components.hisense_tv: debug
-    hisense_tv: debug
+    custom_components.vidaa_tv: debug
+    pyvidaa: debug
 ```
 
 ## Known Limitations

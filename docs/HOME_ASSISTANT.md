@@ -260,7 +260,7 @@ If auto-discovery is disabled, configure entities manually:
 mqtt:
   media_player:
     - name: "Hisense TV"
-      unique_id: "hisense_tv_living_room"
+      unique_id: "vidaa_tv_living_room"
       state_topic: "hisense2mqtt/10_0_0_194/state/power"
       command_topic: "hisense2mqtt/10_0_0_194/set/power"
       volume_level_topic: "hisense2mqtt/10_0_0_194/state/volume"

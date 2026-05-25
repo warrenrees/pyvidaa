@@ -2,7 +2,7 @@
 
 from typing import Final
 
-DOMAIN: Final = "hisense_tv"
+DOMAIN: Final = "vidaa_tv"
 
 # Configuration keys
 CONF_HOST: Final = "host"

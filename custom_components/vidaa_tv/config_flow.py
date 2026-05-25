@@ -304,7 +304,7 @@ class VidaaTVConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if not vidaa_support:
             _LOGGER.debug("SSDP device does not have vidaa_support=1, ignoring: %s",
                          discovery_info.ssdp_headers.get("_host"))
-            return self.async_abort(reason="not_hisense_tv")
+            return self.async_abort(reason="not_vidaa_tv")
 
         # Extract host from discovery
         self._host = discovery_info.ssdp_headers.get("_host") or discovery_info.ssdp_location

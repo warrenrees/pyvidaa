@@ -2,16 +2,16 @@
 #
 # Prerequisites:
 # 1. Install tv-card from HACS (https://github.com/usernein/tv-card)
-# 2. Replace 'remote.hisense_tv_remote' with your actual remote entity ID
+# 2. Replace 'remote.vidaa_tv_remote' with your actual remote entity ID
 #
 # Add this to your Lovelace dashboard via:
 # - UI: Edit Dashboard -> Add Card -> Manual -> paste YAML
 # - YAML mode: Add to your lovelace configuration
 
 type: custom:tv-card
-entity: remote.hisense_tv_remote
+entity: remote.vidaa_tv_remote
 # Optional: specify media_player for power state indication
-# media_player_entity: media_player.hisense_tv
+# media_player_entity: media_player.vidaa_tv
 
 # Remote layout configuration
 rows:
@@ -67,17 +67,17 @@ custom_keys:
       command: info
   netflix:
     icon: mdi:netflix
-    service: hisense_tv.launch_app
+    service: vidaa_tv.launch_app
     service_data:
       app: netflix
   youtube:
     icon: mdi:youtube
-    service: hisense_tv.launch_app
+    service: vidaa_tv.launch_app
     service_data:
       app: youtube
   amazon:
     icon: mdi:amazon
-    service: hisense_tv.launch_app
+    service: vidaa_tv.launch_app
     service_data:
       app: amazon
   back:

@@ -2,7 +2,7 @@
 #
 # Prerequisites:
 # 1. Install button-card from HACS (https://github.com/custom-cards/button-card)
-# 2. Replace 'remote.hisense_tv_remote' with your actual entity ID
+# 2. Replace 'remote.vidaa_tv_remote' with your actual entity ID
 #
 # Add this as a vertical-stack card
 
@@ -17,7 +17,7 @@ cards:
           action: call-service
           service: remote.send_command
           service_data:
-            entity_id: remote.hisense_tv_remote
+            entity_id: remote.vidaa_tv_remote
             command: power
         styles:
           card:
@@ -27,7 +27,7 @@ cards:
         color: rgb(229, 9, 20)
         tap_action:
           action: call-service
-          service: hisense_tv.launch_app
+          service: vidaa_tv.launch_app
           service_data:
             app: netflix
         styles:
@@ -38,7 +38,7 @@ cards:
         color: rgb(255, 0, 0)
         tap_action:
           action: call-service
-          service: hisense_tv.launch_app
+          service: vidaa_tv.launch_app
           service_data:
             app: youtube
         styles:
@@ -48,7 +48,7 @@ cards:
         icon: mdi:amazon
         tap_action:
           action: call-service
-          service: hisense_tv.launch_app
+          service: vidaa_tv.launch_app
           service_data:
             app: amazon
         styles:
@@ -66,7 +66,7 @@ cards:
           action: call-service
           service: remote.send_command
           service_data:
-            entity_id: remote.hisense_tv_remote
+            entity_id: remote.vidaa_tv_remote
             command: back
         styles:
           card:
@@ -79,7 +79,7 @@ cards:
           action: call-service
           service: remote.send_command
           service_data:
-            entity_id: remote.hisense_tv_remote
+            entity_id: remote.vidaa_tv_remote
             command: home
         styles:
           card:
@@ -92,7 +92,7 @@ cards:
           action: call-service
           service: remote.send_command
           service_data:
-            entity_id: remote.hisense_tv_remote
+            entity_id: remote.vidaa_tv_remote
             command: menu
         styles:
           card:
@@ -114,7 +114,7 @@ cards:
           action: call-service
           service: remote.send_command
           service_data:
-            entity_id: remote.hisense_tv_remote
+            entity_id: remote.vidaa_tv_remote
             command: up
         styles:
           card:
@@ -136,7 +136,7 @@ cards:
           action: call-service
           service: remote.send_command
           service_data:
-            entity_id: remote.hisense_tv_remote
+            entity_id: remote.vidaa_tv_remote
             command: left
         styles:
           card:
@@ -149,7 +149,7 @@ cards:
           action: call-service
           service: remote.send_command
           service_data:
-            entity_id: remote.hisense_tv_remote
+            entity_id: remote.vidaa_tv_remote
             command: ok
         styles:
           card:
@@ -160,7 +160,7 @@ cards:
           action: call-service
           service: remote.send_command
           service_data:
-            entity_id: remote.hisense_tv_remote
+            entity_id: remote.vidaa_tv_remote
             command: right
         styles:
           card:
@@ -182,7 +182,7 @@ cards:
           action: call-service
           service: remote.send_command
           service_data:
-            entity_id: remote.hisense_tv_remote
+            entity_id: remote.vidaa_tv_remote
             command: down
         styles:
           card:
@@ -204,7 +204,7 @@ cards:
           action: call-service
           service: remote.send_command
           service_data:
-            entity_id: remote.hisense_tv_remote
+            entity_id: remote.vidaa_tv_remote
             command: volumedown
         styles:
           card:
@@ -215,7 +215,7 @@ cards:
           action: call-service
           service: remote.send_command
           service_data:
-            entity_id: remote.hisense_tv_remote
+            entity_id: remote.vidaa_tv_remote
             command: mute
         styles:
           card:
@@ -226,7 +226,7 @@ cards:
           action: call-service
           service: remote.send_command
           service_data:
-            entity_id: remote.hisense_tv_remote
+            entity_id: remote.vidaa_tv_remote
             command: volumeup
         styles:
           card:
@@ -241,7 +241,7 @@ cards:
           action: call-service
           service: remote.send_command
           service_data:
-            entity_id: remote.hisense_tv_remote
+            entity_id: remote.vidaa_tv_remote
             command: rewind
         styles:
           card:
@@ -252,7 +252,7 @@ cards:
           action: call-service
           service: remote.send_command
           service_data:
-            entity_id: remote.hisense_tv_remote
+            entity_id: remote.vidaa_tv_remote
             command: play
         styles:
           card:
@@ -263,7 +263,7 @@ cards:
           action: call-service
           service: remote.send_command
           service_data:
-            entity_id: remote.hisense_tv_remote
+            entity_id: remote.vidaa_tv_remote
             command: forward
         styles:
           card:

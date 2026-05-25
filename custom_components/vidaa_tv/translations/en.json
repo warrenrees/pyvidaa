@@ -2,8 +2,8 @@
   "config": {
     "step": {
       "user": {
-        "title": "Hisense TV",
-        "description": "Enter the IP address of your Hisense TV.",
+        "title": "Vidaa TV",
+        "description": "Enter the IP address of your Vidaa TV.",
         "data": {
           "host": "Host",
           "port": "Port"
@@ -18,7 +18,7 @@
         }
       },
       "confirm": {
-        "title": "Confirm Hisense TV",
+        "title": "Confirm Vidaa TV",
         "description": "Do you want to set up {name} ({host})?"
       },
       "pair": {
@@ -29,7 +29,7 @@
         }
       },
       "reauth_confirm": {
-        "title": "Reauthenticate Hisense TV",
+        "title": "Reauthenticate Vidaa TV",
         "description": "The TV at {host} requires reauthentication. A new PIN will be displayed on the TV."
       }
     },
@@ -46,15 +46,15 @@
       "cannot_connect": "Cannot connect to TV.",
       "no_host": "Could not determine TV host address.",
       "tv_not_responding": "TV is not responding. Make sure it is powered on and connected to the network.",
-      "not_hisense_tv": "Device is not a Hisense/Vidaa TV.",
+      "not_vidaa_tv": "Device is not a Hisense/Vidaa TV.",
       "reauth_successful": "Reauthentication successful."
     }
   },
   "options": {
     "step": {
       "init": {
-        "title": "Hisense TV Options",
-        "description": "Configure options for your Hisense TV.",
+        "title": "Vidaa TV Options",
+        "description": "Configure options for your Vidaa TV.",
         "data": {
           "scan_interval": "Polling interval",
           "wol_mac": "Wake-on-LAN MAC address"
@@ -68,7 +68,7 @@
   },
   "exceptions": {
     "no_tvs_configured": {
-      "message": "No Hisense TVs are configured."
+      "message": "No Vidaa TVs are configured."
     },
     "command_failed": {
       "message": "Failed to send command to TV: {error}"
@@ -87,7 +87,7 @@
         "step": {
           "confirm": {
             "title": "Add SSL Certificates",
-            "description": "The Hisense TV integration requires SSL certificates for authentication.\n\nPlease place the following files in `{cert_dir}/`:\n- `{cert_file}`\n- `{key_file}`\n\nThese can be extracted from the Vidaa APK. Click Submit after adding the files."
+            "description": "The Vidaa TV integration requires SSL certificates for authentication.\n\nPlease place the following files in `{cert_dir}/`:\n- `{cert_file}`\n- `{key_file}`\n\nThese can be extracted from the Vidaa APK. Click Submit after adding the files."
           }
         },
         "abort": {
@@ -102,7 +102,7 @@
         "step": {
           "init": {
             "title": "Reconnect to TV",
-            "description": "The connection to your Hisense TV at {host} has failed.\n\nPlease ensure:\n1. The TV is powered on\n2. The TV is connected to the network\n3. No firewall is blocking port 36669\n\nClick Submit to acknowledge and retry."
+            "description": "The connection to your Vidaa TV at {host} has failed.\n\nPlease ensure:\n1. The TV is powered on\n2. The TV is connected to the network\n3. No firewall is blocking port 36669\n\nClick Submit to acknowledge and retry."
           }
         }
       },
