@@ -43,6 +43,10 @@ ATTR_APP: Final = "app"
 
 # States
 STATE_FAKE_SLEEP: Final = "fake_sleep_0"
+STATE_REMOTE_LAUNCHER: Final = "remote_launcher"  # TV at the home screen
+
+# Remote activity shown when the TV is on its home screen / launcher
+ACTIVITY_HOME: Final = "Home"
 
 # Platform types
 PLATFORMS: Final = ["media_player", "remote"]

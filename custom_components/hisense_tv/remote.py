@@ -18,6 +18,8 @@ from .const import (
     CONF_MODEL,
     CONF_SW_VERSION,
     DEFAULT_NAME,
+    ACTIVITY_HOME,
+    STATE_REMOTE_LAUNCHER,
 )
 from .coordinator import VidaaTVDataUpdateCoordinator
 
@@ -129,20 +131,34 @@ class VidaaTVRemote(CoordinatorEntity[VidaaTVDataUpdateCoordinator], RemoteEntit
 
     @property
     def current_activity(self) -> str | None:
-        """Return current activity (app name or source)."""
-        if not self.coordinator.data:
+        """Return current activity (app name, source, or the home screen)."""
+        data = self.coordinator.data
+        if not data:
             return None
-        return self.coordinator.data.get("app") or self.coordinator.data.get("source")
+        activity = data.get("app") or data.get("source")
+        if activity:
+            return activity
+        # At the launcher/home screen the TV reports neither an app nor a
+        # source; surface "Home" so the remote shows a current activity.
+        if data.get("is_on") and data.get("statetype") == STATE_REMOTE_LAUNCHER:
+            return ACTIVITY_HOME
+        return None
 
     @property
     def activity_list(self) -> list[str] | None:
-        """Return list of activities (apps)."""
-        return self._activity_list if self._activity_list else None
+        """Return list of activities (Home plus launchable apps)."""
+        if not self._activity_list:
+            # Still offer Home even before the app list has been fetched.
+            return [ACTIVITY_HOME]
+        return [ACTIVITY_HOME, *self._activity_list]
 
     async def async_turn_on(self, activity: str | None = None, **kwargs: Any) -> None:
         """Turn the TV on and optionally start an activity."""
         await self.coordinator.async_turn_on()
-        if activity:
+        if activity == ACTIVITY_HOME:
+            # "Home" is the launcher, not an app - navigate there via the key.
+            await self.coordinator.async_send_key(get_key("home"))
+        elif activity:
             # Launch the app/activity
             await self.coordinator.async_launch_app(activity)
 
