@@ -13,6 +13,9 @@ DEFAULT_PORT = 36669           # TV MQTT broker port
 DISCOVERY_PORT = 36671         # Hisense UDP discovery port
 SSDP_PORT = 1900              # Standard SSDP port
 UPNP_PORT = 38400             # UPnP XML descriptor port
+# Some VIDAA OS versions serve the UPnP descriptor on 18400 instead of 38400.
+# Tried in order, so the common 38400 case is attempted first.
+UPNP_PORTS = (38400, 18400)   # Candidate UPnP XML descriptor ports
 
 # === Network Addresses ===
 SSDP_ADDR = "239.255.255.250"  # SSDP multicast address

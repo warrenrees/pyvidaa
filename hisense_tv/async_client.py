@@ -660,7 +660,7 @@ async def async_discover_udp(
 
 async def async_probe_ip(
     ip: str,
-    port: int = 36671,
+    port: Optional[int] = None,
     timeout: float = 3.0,
     executor: Optional[ThreadPoolExecutor] = None,
 ) -> Optional[Any]:
@@ -668,7 +668,8 @@ async def async_probe_ip(
 
     Args:
         ip: Target IP address
-        port: Target port
+        port: UPnP port. If None (default), each candidate in UPNP_PORTS is
+            tried in order (some VIDAA OS versions use 18400 instead of 38400).
         timeout: Probe timeout
         executor: Custom executor
 
@@ -714,7 +715,7 @@ async def async_discover_all(
 
 async def async_detect_protocol(
     host: str,
-    port: int = 38400,
+    port: Optional[int] = None,
     timeout: float = 5.0,
     executor: Optional[ThreadPoolExecutor] = None,
 ) -> Optional[int]:
@@ -722,7 +723,8 @@ async def async_detect_protocol(
 
     Args:
         host: TV IP address
-        port: HTTP port (default 38400)
+        port: HTTP port. If None (default), each candidate in UPNP_PORTS is
+            tried in order (some VIDAA OS versions use 18400 instead of 38400).
         timeout: Request timeout
 
     Returns:

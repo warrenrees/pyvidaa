@@ -22,6 +22,7 @@ from .config import (
     BROADCAST_ADDR,
     SSDP_ADDR,
     SSDP_PORT,
+    UPNP_PORTS,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -59,6 +60,7 @@ class DiscoveredTV:
     port: int = 36669
     name: Optional[str] = None
     model: Optional[str] = None
+    brand: Optional[str] = None
     mac: Optional[str] = None
     protocol_version: Optional[str] = None
     location: Optional[str] = None
@@ -411,7 +413,7 @@ def discover_udp(
 
 def probe_ip(
     ip: str,
-    port: int = 38400,
+    port: Optional[int] = None,
     timeout: float = 3.0,
 ) -> Optional[DiscoveredTV]:
     """Probe a specific IP address for a Hisense TV.
@@ -420,12 +422,27 @@ def probe_ip(
 
     Args:
         ip: Target IP address.
-        port: UPnP port (default: 38400).
+        port: UPnP port. If None (default), each candidate in UPNP_PORTS is
+            tried in order (some VIDAA OS versions use 18400 instead of 38400).
         timeout: How long to wait for response in seconds.
 
     Returns:
         DiscoveredTV if device responds, None otherwise.
     """
+    candidate_ports = [port] if port is not None else list(UPNP_PORTS)
+    for candidate in candidate_ports:
+        device = _probe_ip_port(ip, candidate, timeout)
+        if device is not None:
+            return device
+    return None
+
+
+def _probe_ip_port(
+    ip: str,
+    port: int,
+    timeout: float,
+) -> Optional[DiscoveredTV]:
+    """Probe a single IP:port for a Hisense TV's UPnP descriptor."""
     import urllib.request
     import xml.etree.ElementTree as ET
 
@@ -499,6 +516,7 @@ def probe_ip(
             ip=ip,
             name=name,
             model=model,
+            brand=raw_data.get('brand'),
             mac=mac,
             protocol_version=raw_data.get('transport_protocol'),
             source="probe",

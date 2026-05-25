@@ -47,6 +47,43 @@ def _status(**over):
     return base
 
 
+def test_resolve_brand_prefers_explicit_config(monkeypatch):
+    """An explicitly configured non-Hisense brand is used without probing."""
+    bridge = _bridge()
+    called = {"probe": False}
+
+    def fake_probe(*a, **k):
+        called["probe"] = True
+        return MagicMock(brand="his")
+
+    monkeypatch.setattr("hisense_tv.discovery.probe_ip", fake_probe)
+    brand = bridge._resolve_brand({"host": "10.0.0.50", "brand": "tpv"})
+    assert brand == "tpv"
+    assert called["probe"] is False
+
+
+def test_resolve_brand_autodiscovers_when_unset(monkeypatch):
+    """When brand is unset/default, it is discovered via the UPnP probe."""
+    bridge = _bridge()
+    monkeypatch.setattr(
+        "hisense_tv.discovery.probe_ip",
+        lambda *a, **k: MagicMock(brand="tpv"),
+    )
+    assert bridge._resolve_brand({"host": "10.0.0.50"}) == "tpv"
+    assert bridge._resolve_brand({"host": "10.0.0.50", "brand": "his"}) == "tpv"
+
+
+def test_resolve_brand_falls_back_to_his(monkeypatch):
+    """A failed probe falls back to the 'his' default."""
+    bridge = _bridge()
+
+    def boom(*a, **k):
+        raise OSError("unreachable")
+
+    monkeypatch.setattr("hisense_tv.discovery.probe_ip", boom)
+    assert bridge._resolve_brand({"host": "10.0.0.50"}) == "his"
+
+
 @pytest.mark.parametrize(
     "status,expect_refresh",
     [

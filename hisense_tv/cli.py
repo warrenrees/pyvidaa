@@ -61,6 +61,26 @@ def _resolve_mac_for_ip(ip: str) -> Optional[str]:
     return None
 
 
+def _resolve_brand_for_ip(ip: str) -> str:
+    """Resolve a TV's brand for dynamic-auth credentials.
+
+    brand is part of the MQTT client_id and credential hashes, so a non-Hisense
+    VIDAA OEM needs its own brand string or auth fails. Checks config first, then
+    a live UPnP probe, defaulting to "his" (Hisense) like the Vidaa app does.
+    """
+    for cfg in list_tvs():
+        if cfg.get("host") == ip and cfg.get("brand"):
+            return cfg["brand"]
+
+    try:
+        device = probe_ip(ip, timeout=3.0)
+        if device and device.brand:
+            return device.brand
+    except Exception:
+        pass
+    return "his"
+
+
 def create_tv_client(tv_id: Optional[str] = None, ip: Optional[str] = None) -> HisenseTV:
     """Create TV client with config settings.
 
@@ -80,7 +100,7 @@ def create_tv_client(tv_id: Optional[str] = None, ip: Optional[str] = None) -> H
             port=DEFAULT_PORT,
             mac_address=mac_address,
             use_dynamic_auth=True,
-            brand="his",
+            brand=_resolve_brand_for_ip(ip),
         )
 
     # Get TV config by ID or use default
@@ -368,6 +388,8 @@ def cmd_config(args):
                 extra["mac"] = device.mac
             if device.name:
                 extra["name"] = device.name
+            if device.brand:
+                extra["brand"] = device.brand
             if device.protocol_version:
                 extra["protocol_version"] = device.protocol_version
 
@@ -470,6 +492,8 @@ def cmd_discover(args):
             print(f"    Name:  {device.name}")
         if device.model:
             print(f"    Model: {device.model}")
+        if device.brand:
+            print(f"    Brand: {device.brand}")
         if device.mac:
             print(f"    MAC:   {device.mac}")
         if verbose:

@@ -17,6 +17,7 @@ from custom_components.hisense_tv.config_flow import (
     HisenseTVConfigFlow,
 )
 from custom_components.hisense_tv.const import (
+    CONF_BRAND,
     CONF_CERTFILE,
     CONF_DEVICE_ID,
     CONF_KEYFILE,
@@ -126,6 +127,36 @@ async def test_pair_flow_success(
     assert result["title"] == "Living Room TV"
     assert result["data"][CONF_HOST] == "192.168.1.100"
     assert result["data"][CONF_DEVICE_ID] == "001122334455"
+    # brand is resolved via UPnP probe on the manual path (mocked to "his")
+    assert result["data"][CONF_BRAND] == "his"
+
+
+async def test_pair_flow_persists_discovered_brand(
+    hass: HomeAssistant,
+    mock_config_flow_tv: MagicMock,
+    mock_certs_exist: MagicMock,
+    mock_setup_entry: AsyncMock,
+) -> None:
+    """A non-Hisense brand from the UPnP probe is persisted to the entry."""
+    mock_config_flow_tv  # AsyncHisenseTV mock is active via fixture
+    with patch(
+        "custom_components.hisense_tv.config_flow.probe_ip",
+        return_value=MagicMock(brand="tpv", mac="00:11:22:33:44:55"),
+    ):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": config_entries.SOURCE_USER}
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {CONF_HOST: "192.168.1.100"},
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {"pin": "1234"},
+        )
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_BRAND] == "tpv"
 
 
 async def test_pair_flow_invalid_pin(
@@ -282,6 +313,31 @@ async def test_ssdp_discovery_valid_hisense_tv(
     # Should proceed to pair step
     assert result["type"] == FlowResultType.FORM
     assert result["step_id"] == "pair"
+
+
+async def test_ssdp_discovery_captures_brand_from_descriptor(
+    hass: HomeAssistant,
+    mock_config_flow_tv: MagicMock,
+    mock_certs_exist: MagicMock,
+    mock_setup_entry: AsyncMock,
+) -> None:
+    """brand from the SSDP modelDescription is captured and persisted."""
+    discovery_info = _create_ssdp_discovery_info(
+        model_description="vidaa_support=1\nbrand=tpv\nmodel=H55A6500"
+    )
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN,
+        context={"source": config_entries.SOURCE_SSDP},
+        data=discovery_info,
+    )
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"pin": "1234"}
+    )
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_BRAND] == "tpv"
 
 
 async def test_ssdp_discovery_not_hisense_tv(

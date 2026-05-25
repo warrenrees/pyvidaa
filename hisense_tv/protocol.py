@@ -17,6 +17,7 @@ from .config import (
     PROTOCOL_MODERN_THRESHOLD,
     PROTOCOL_MIDDLE_THRESHOLD,
     UPNP_PORT,
+    UPNP_PORTS,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -31,7 +32,7 @@ class AuthMethod(Enum):
 
 def detect_protocol(
     host: str,
-    port: int = UPNP_PORT,
+    port: Optional[int] = None,
     timeout: float = 5.0,
     retries: int = 2,
     retry_delay: float = 0.5,
@@ -43,7 +44,8 @@ def detect_protocol(
 
     Args:
         host: TV IP address or hostname
-        port: HTTP port (default 38400)
+        port: HTTP port. If None (default), each candidate in UPNP_PORTS is
+            tried in order (some VIDAA OS versions use 18400 instead of 38400).
         timeout: Request timeout in seconds
         retries: Extra attempts on transient network errors (these TVs
             intermittently drop off the network, e.g. EHOSTUNREACH)
@@ -52,6 +54,24 @@ def detect_protocol(
     Returns:
         Transport protocol version as integer, or None if detection fails
     """
+    candidate_ports = [port] if port is not None else list(UPNP_PORTS)
+    for candidate in candidate_ports:
+        version = _detect_protocol_port(
+            host, candidate, timeout, retries, retry_delay
+        )
+        if version is not None:
+            return version
+    return None
+
+
+def _detect_protocol_port(
+    host: str,
+    port: int,
+    timeout: float,
+    retries: int,
+    retry_delay: float,
+) -> Optional[int]:
+    """Detect the transport protocol from a single host:port descriptor."""
     url = f"http://{host}:{port}/MediaServer/rendererdevicedesc.xml"
 
     xml_content = None

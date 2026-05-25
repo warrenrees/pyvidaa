@@ -30,6 +30,7 @@ from .const import (
     CONF_DEVICE_ID,
     CONF_MAC,
     CONF_MODEL,
+    CONF_BRAND,
     CONF_SW_VERSION,
     CONF_CERTFILE,
     CONF_KEYFILE,
@@ -58,6 +59,7 @@ if str(lib_path) not in sys.path:
     sys.path.insert(0, str(lib_path))
 
 from hisense_tv import AsyncHisenseTV
+from hisense_tv.discovery import probe_ip
 
 
 def get_default_cert_paths(hass: HomeAssistant) -> tuple[str, str]:
@@ -86,6 +88,7 @@ async def validate_connection(
     certfile: str | None = None,
     keyfile: str | None = None,
     mac_address: str | None = None,
+    brand: str = "his",
 ) -> dict[str, Any]:
     """Validate we can connect to the TV."""
     # Use provided MAC or generate a random one for dynamic auth
@@ -98,6 +101,7 @@ async def validate_connection(
         keyfile=keyfile,
         use_dynamic_auth=True,
         mac_address=mac,
+        brand=brand,
         enable_persistence=False,
     )
 
@@ -152,6 +156,7 @@ class HisenseTVConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._device_id: str | None = None
         self._mac: str = generate_random_mac()  # Random MAC for dynamic auth
         self._model: str | None = None
+        self._brand: str | None = None
         self._sw_version: str | None = None
         self._discovery_info: ssdp.SsdpServiceInfo | None = None
         self._certfile: str | None = None
@@ -288,9 +293,13 @@ class HisenseTVConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         for line in model_desc.split('\n'):
             if '=' in line:
                 key, _, value = line.partition('=')
-                if key.strip() == 'vidaa_support' and value.strip() == '1':
+                key = key.strip()
+                value = value.strip()
+                if key == 'vidaa_support' and value == '1':
                     vidaa_support = True
-                    break
+                elif key == 'brand' and value:
+                    # brand is an auth input (part of client_id/credentials)
+                    self._brand = value
 
         if not vidaa_support:
             _LOGGER.debug("SSDP device does not have vidaa_support=1, ignoring: %s",
@@ -339,6 +348,7 @@ class HisenseTVConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 self._port,
                 certfile=self._certfile,
                 keyfile=self._keyfile,
+                brand=self._brand or "his",
             )
             self._name = info.get("name", self._name)
             self._device_id = info.get("device_id")
@@ -402,6 +412,18 @@ class HisenseTVConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             pin = user_input.get("pin", "")
 
+            # brand is an auth input. SSDP discovery already captured it from the
+            # descriptor; for the manual entry path, probe the TV's UPnP descriptor.
+            if not self._brand and self._host:
+                try:
+                    device = await self.hass.async_add_executor_job(
+                        probe_ip, self._host
+                    )
+                    if device and device.brand:
+                        self._brand = device.brand
+                except Exception as err:  # noqa: BLE001 - best effort, falls back to "his"
+                    _LOGGER.debug("Could not probe brand for %s: %s", self._host, err)
+
             # Create TV client for pairing
             tv = AsyncHisenseTV(
                 host=self._host,
@@ -410,6 +432,7 @@ class HisenseTVConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 keyfile=self._keyfile,
                 use_dynamic_auth=True,
                 mac_address=self._mac,
+                brand=self._brand or "his",
                 enable_persistence=True,
             )
 
@@ -441,6 +464,7 @@ class HisenseTVConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                                 CONF_DEVICE_ID: self._device_id,
                                 CONF_MAC: self._mac,  # New MAC used for auth
                                 CONF_MODEL: self._model,
+                                CONF_BRAND: self._brand or "his",
                                 CONF_SW_VERSION: self._sw_version,
                                 CONF_CERTFILE: self._certfile,
                                 CONF_KEYFILE: self._keyfile,

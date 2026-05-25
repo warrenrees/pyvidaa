@@ -119,6 +119,7 @@ from .config import (
     SSDP_ADDR,
     SSDP_PORT,
     UPNP_PORT,
+    UPNP_PORTS,
     BROADCAST_ADDR,
     DEFAULT_MQTT_USERNAME,
     DEFAULT_MQTT_PASSWORD,

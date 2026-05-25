@@ -74,7 +74,9 @@ def _scoped_tv(entry: dict, key: Optional[str] = None) -> dict:
         "mac": entry.get("mac"),
         "uuid": _resolve_uuid(entry, host, port),
         "name": entry.get("name") or entry.get("alias") or "Hisense TV",
-        "brand": entry.get("brand", "his"),
+        # Leave unset (None) when not explicitly configured so the bridge can
+        # auto-discover the brand from the TV's UPnP descriptor.
+        "brand": entry.get("brand"),
     }
 
 

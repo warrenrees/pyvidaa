@@ -104,9 +104,33 @@ class HisenseMQTTBridge:
             port=tv_config.get("port", 36669),
             mac_address=tv_config.get("uuid"),
             use_dynamic_auth=True,
-            brand=tv_config.get("brand", "his"),
+            brand=self._resolve_brand(tv_config),
             on_state_change=self._on_tv_state_change,
         )
+
+    def _resolve_brand(self, tv_config: dict) -> str:
+        """Resolve the TV brand for dynamic-auth credentials.
+
+        brand is part of the MQTT client_id and credential hashes, so a
+        non-Hisense VIDAA OEM needs its own brand string or auth fails. An
+        explicitly configured brand wins; otherwise (unset or the "his" default)
+        we probe the TV's UPnP descriptor, falling back to "his".
+        """
+        brand = tv_config.get("brand")
+        if brand and brand != "his":
+            return brand
+
+        try:
+            from hisense_tv.discovery import probe_ip
+
+            device = probe_ip(tv_config["host"], timeout=3.0)
+            if device and device.brand:
+                logger.info("Discovered TV brand via UPnP: %s", device.brand)
+                return device.brand
+        except Exception as err:
+            logger.debug("Could not probe brand for %s: %s", tv_config.get("host"), err)
+
+        return brand or "his"
 
     def _on_broker_connect(self, client, userdata, flags, rc):
         """Handle broker connection."""
