@@ -689,13 +689,12 @@ def cmd_monitor(args):
     ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     ssl_ctx.check_hostname = False
     ssl_ctx.verify_mode = ssl.CERT_NONE
-    # Use absolute path for certs
-    import os
-    cert_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "certs")
-    ssl_ctx.load_cert_chain(
-        os.path.join(cert_dir, "vidaa_client.pem"),
-        os.path.join(cert_dir, "vidaa_client.key")
-    )
+    from .certs import MISSING_CERT_HELP, resolve_client_certs
+    certs = resolve_client_certs()
+    if not certs:
+        print(f"Error: {MISSING_CERT_HELP}")
+        return
+    ssl_ctx.load_cert_chain(certs[0], certs[1])
     client.tls_set_context(ssl_ctx)
 
     print(f"Connecting to TV at {host}...")

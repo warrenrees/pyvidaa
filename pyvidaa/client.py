@@ -6,11 +6,9 @@ Supports authentication, remote control, volume, sources, and apps.
 
 import json
 import logging
-import os
 import ssl
 import threading
 import time
-from pathlib import Path
 from typing import Any, Callable, Optional
 
 import paho.mqtt.client as mqtt
@@ -22,11 +20,10 @@ from .config import (
     DEFAULT_MQTT_USERNAME,
     DEFAULT_MQTT_PASSWORD,
     DEFAULT_CLIENT_ID,
-    DEFAULT_CERT_FILENAME,
-    DEFAULT_KEY_FILENAME,
     TokenStorage,
     get_storage,
 )
+from .certs import MISSING_CERT_HELP, resolve_client_certs
 from .credentials import generate_credentials, generate_credentials_static
 from .keys import ALL_KEYS
 from .protocol import AuthMethod, detect_protocol, get_auth_method, get_auth_method_order
@@ -65,9 +62,6 @@ from .topics import (
 
 class HisenseTV:
     """Client to control Hisense TV via MQTT."""
-
-    # Default certificate paths (relative to package or absolute)
-    _CERTS_DIR = Path(__file__).parent.parent / "certs"
 
     def __init__(
         self,
@@ -248,26 +242,29 @@ class HisenseTV:
         self._client.on_disconnect = self._on_disconnect
         self._client.on_message = self._on_message
 
+        # Resolve the client certificate/key pair once, so the initial connect
+        # and any later reconnect use the same source (explicit args, env var,
+        # ~/.config/pyvidaa/certs, or a repo-local ./certs).
+        self._certs = resolve_client_certs(certfile, keyfile)
+
         # Configure SSL with client certificate for mutual TLS
         if use_ssl:
-            # Use provided certs or defaults
-            cert = certfile or (self._CERTS_DIR / DEFAULT_CERT_FILENAME)
-            key = keyfile or (self._CERTS_DIR / DEFAULT_KEY_FILENAME)
-
-            # Check if certificate files exist
-            if os.path.exists(cert) and os.path.exists(key):
+            if self._certs:
+                cert, key = self._certs
                 # Using client certs - also need username/password
                 self._client.username_pw_set(self._username, self._password)
                 self._client.tls_set(
                     ca_certs=None,
-                    certfile=str(cert),
-                    keyfile=str(key),
+                    certfile=cert,
+                    keyfile=key,
                     cert_reqs=ssl.CERT_NONE,
                     tls_version=ssl.PROTOCOL_TLS,
                 )
                 self._client.tls_insecure_set(True)
             else:
-                # Fallback to basic SSL without client cert - use username/password
+                # No client cert found. Mutual TLS is required by some protocol
+                # versions, so warn (with guidance) and fall back to plain TLS.
+                _LOGGER.warning("%s", MISSING_CERT_HELP)
                 self._client.username_pw_set(self._username, self._password)
                 context = ssl.create_default_context()
                 if not verify_ssl:
@@ -436,16 +433,15 @@ class HisenseTV:
             self._client.on_disconnect = self._on_disconnect
             self._client.on_message = self._on_message
 
-            # Reconfigure SSL
+            # Reconfigure SSL (reuse the cert pair resolved at init)
             if self.use_ssl:
-                cert = self._CERTS_DIR / DEFAULT_CERT_FILENAME
-                key = self._CERTS_DIR / DEFAULT_KEY_FILENAME
-                if os.path.exists(cert) and os.path.exists(key):
+                if self._certs:
+                    cert, key = self._certs
                     self._client.username_pw_set(self._username, self._password)
                     self._client.tls_set(
                         ca_certs=None,
-                        certfile=str(cert),
-                        keyfile=str(key),
+                        certfile=cert,
+                        keyfile=key,
                         cert_reqs=ssl.CERT_NONE,
                         tls_version=ssl.PROTOCOL_TLS,
                     )

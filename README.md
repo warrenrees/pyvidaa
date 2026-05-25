@@ -25,6 +25,53 @@ Python library and Home Assistant integration for Hisense/Vidaa Smart TV control
 - Multi-TV support
 - Docker deployment ready (MQTT bridge)
 
+## Obtaining the client certificate
+
+Modern Vidaa TVs require **mutual TLS** — the client must present a certificate and
+private key that are built into the official Vidaa mobile app. For legal reasons
+**pyvidaa does not ship this certificate**; you supply your own copy. (Older,
+legacy-protocol TVs may connect without it; when it is missing pyvidaa logs a
+warning and falls back to plain TLS.)
+
+### Where pyvidaa looks for it
+
+pyvidaa searches for `vidaa_client.pem` (certificate) and `vidaa_client.key`
+(private key), in this order:
+
+1. Paths passed explicitly — `certfile=` / `keyfile=` in the library, or the
+   certificate step of the Home Assistant config flow.
+2. `$PYVIDAA_CERT_DIR`
+3. `~/.config/pyvidaa/certs/`  ← recommended for CLI / bridge installs
+4. `./certs/` next to a source checkout (development only)
+
+```bash
+mkdir -p ~/.config/pyvidaa/certs
+cp vidaa_client.pem vidaa_client.key ~/.config/pyvidaa/certs/
+```
+
+For the Home Assistant integration, place the files under your HA config directory
+as prompted by the setup flow.
+
+### Extracting it from the Vidaa app
+
+The certificate ships inside the Vidaa Android app as a PKCS#12 keystore
+(`client_mobile_android.p12`):
+
+1. Obtain the Vidaa app APK and unzip it (`unzip vidaa.apk`).
+2. Locate `client_mobile_android.p12` among the app's assets.
+3. Convert it to the PEM certificate + unencrypted key pyvidaa expects:
+
+   ```bash
+   # certificate
+   openssl pkcs12 -in client_mobile_android.p12 -clcerts -nokeys -out vidaa_client.pem
+   # private key (unencrypted PKCS#8)
+   openssl pkcs12 -in client_mobile_android.p12 -nocerts -nodes -out vidaa_client.key
+   ```
+
+The keystore password and further APK details are documented in
+[`VIDAA_PROTOCOL_ANALYSIS.md`](VIDAA_PROTOCOL_ANALYSIS.md). The certificate remains
+the property of its owner and is not redistributed by this project.
+
 ## Quick Start
 
 ### 1. Prerequisites
