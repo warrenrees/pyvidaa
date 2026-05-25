@@ -3,10 +3,13 @@
 
 import argparse
 import json
+import ssl
 import sys
+import threading
 import time
 from typing import Optional
 
+from .certs import MISSING_CERT_HELP, resolve_client_certs
 from .client import HisenseTV
 from .discovery import discover_all, discover_ssdp, discover_udp, probe_ip
 from .config import (
@@ -689,7 +692,6 @@ def cmd_monitor(args):
     ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     ssl_ctx.check_hostname = False
     ssl_ctx.verify_mode = ssl.CERT_NONE
-    from .certs import MISSING_CERT_HELP, resolve_client_certs
     certs = resolve_client_certs()
     if not certs:
         print(f"Error: {MISSING_CERT_HELP}")
@@ -817,8 +819,42 @@ def cmd_auth(args):
     return 0
 
 
+_DEFAULT_THREAD_EXCEPTHOOK = threading.excepthook
+
+
+def _quiet_mqtt_thread_excepthook(args):
+    """Replace paho's noisy background-thread traceback for an expected TLS
+    failure with a one-line message.
+
+    The TLS handshake runs in paho's loop thread, so an "I require a client
+    certificate" alert from the TV surfaces there as an uncaught SSLError. For
+    everything else, defer to the default hook.
+    """
+    exc = args.exc_value
+    msg = str(exc).upper()
+    if isinstance(exc, ssl.SSLError) and "CERTIFICATE" in msg and "REQUIRED" in msg:
+        if resolve_client_certs() is None:
+            # The full guidance was already logged as a warning before connecting.
+            print(
+                "Error: the TV requires a client certificate, but none was found "
+                "(see the warning above).",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                "Error: TLS handshake failed - the TV rejected the client "
+                "certificate (alert: certificate required).",
+                file=sys.stderr,
+            )
+        return
+    _DEFAULT_THREAD_EXCEPTHOOK(args)
+
+
 def main():
     """Main CLI entry point."""
+    # Keep expected TLS/cert failures from dumping a paho thread traceback.
+    threading.excepthook = _quiet_mqtt_thread_excepthook
+
     parser = argparse.ArgumentParser(
         prog="tv",
         description="Control your Hisense TV from the command line",

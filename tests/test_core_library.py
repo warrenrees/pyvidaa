@@ -347,3 +347,39 @@ def test_server_verify_args_opt_in(monkeypatch):
 
     on = HisenseTV("10.0.0.50", use_ssl=False, enable_persistence=False, verify_ssl=True)
     assert on._server_verify_args() == (bundled_ca_path(), ssl.CERT_REQUIRED)
+
+
+def test_cli_quiet_excepthook_handles_cert_required(monkeypatch, capsys):
+    """The CLI thread excepthook turns a cert-required SSLError into a clean
+    message, and defers unrelated exceptions to the default hook."""
+    import ssl as _ssl
+
+    from pyvidaa import cli
+
+    monkeypatch.setattr(cli, "resolve_client_certs", lambda *a, **k: None)
+
+    class CertArgs:
+        exc_value = _ssl.SSLError(
+            "[SSL: TLSV13_ALERT_CERTIFICATE_REQUIRED] tlsv13 alert certificate required"
+        )
+        exc_type = _ssl.SSLError
+        exc_traceback = None
+        thread = None
+
+    cli._quiet_mqtt_thread_excepthook(CertArgs())
+    err = capsys.readouterr().err
+    assert "requires a client certificate" in err
+    assert "Traceback" not in err
+
+    # Unrelated errors fall through to the default hook.
+    seen = []
+    monkeypatch.setattr(cli, "_DEFAULT_THREAD_EXCEPTHOOK", lambda a: seen.append(a))
+
+    class OtherArgs:
+        exc_value = ValueError("boom")
+        exc_type = ValueError
+        exc_traceback = None
+        thread = None
+
+    cli._quiet_mqtt_thread_excepthook(OtherArgs())
+    assert len(seen) == 1
