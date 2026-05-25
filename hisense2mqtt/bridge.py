@@ -85,7 +85,18 @@ class HisenseMQTTBridge:
         )
 
     def _setup_tv_client(self):
-        """Set up Hisense TV client."""
+        """Set up (or rebuild) the Hisense TV client.
+
+        Rebuilding re-reads saved-token status from storage, so a reconnect
+        after the access token expires picks up the refresh path instead of
+        reusing a stale token.
+        """
+        if self._tv is not None:
+            try:
+                self._tv.disconnect()
+            except Exception:
+                pass
+
         tv_config = self.config.get("tv", {})
 
         self._tv = HisenseTV(
@@ -256,8 +267,13 @@ class HisenseMQTTBridge:
         return self._connect_tv()
 
     def _connect_tv(self) -> bool:
-        """Connect to TV."""
+        """Connect to TV.
+
+        Rebuilds the client first so an expired access token is refreshed from
+        the still-valid refresh token instead of being replayed and rejected.
+        """
         try:
+            self._setup_tv_client()
             if self._tv.connect(timeout=10):
                 logger.info("Connected to TV")
                 self._available = True
@@ -430,6 +446,53 @@ class HisenseMQTTBridge:
         for topic in topics:
             self._broker_client.publish(topic, "", qos=0, retain=True)
 
+    # Refresh the access token when it has less than this long until expiry.
+    _TOKEN_REFRESH_THRESHOLD = 24 * 60 * 60  # 1 day
+
+    def _maybe_refresh_token(self):
+        """Proactively refresh the access token while connected.
+
+        The access token lasts ~7 days; refreshing before it expires keeps a
+        long-running, continuously-connected bridge authenticated without a
+        restart. A successful refresh persists a new token to storage, so the
+        expiry check naturally stops firing afterwards.
+        """
+        try:
+            from hisense_tv.config import get_storage
+
+            tv_config = self.config.get("tv", {})
+            host = tv_config.get("host")
+            port = tv_config.get("port", 36669)
+            if not host:
+                return
+
+            status = get_storage().get_token_status(host=host, port=port)
+            if not status.get("has_token"):
+                return
+
+            if status.get("needs_reauth"):
+                logger.warning(
+                    "%s: both tokens expired - re-pair with 'tv --ip %s auth pair'",
+                    host, host,
+                )
+                return
+
+            near_expiry = (
+                status.get("access_valid")
+                and status.get("access_expires_in", 0) < self._TOKEN_REFRESH_THRESHOLD
+            )
+            if status.get("needs_refresh") or near_expiry:
+                logger.info(
+                    "Access token near expiry (%ss left), refreshing...",
+                    status.get("access_expires_in", 0),
+                )
+                if self._tv.refresh_token():
+                    logger.info("Access token refreshed")
+                else:
+                    logger.warning("Proactive token refresh failed")
+        except Exception as e:
+            logger.debug("Token refresh check failed: %s", e)
+
     def _poll_state(self):
         """Poll TV state periodically."""
         interval = self.config.get("options", {}).get("poll_interval", 30)
@@ -438,6 +501,9 @@ class HisenseMQTTBridge:
         while self.running:
             try:
                 if self._tv and self._tv.is_connected:
+                    # Renew the access token before it lapses while connected.
+                    self._maybe_refresh_token()
+
                     logger.info("Polling TV state...")
 
                     # Get current state (statetype, app, etc)
@@ -489,9 +555,9 @@ class HisenseMQTTBridge:
 
         self.running = True
 
-        # Set up clients
+        # Set up broker client (the TV client is built on each _connect_tv,
+        # so token status is re-evaluated from storage every reconnect).
         self._setup_broker_client()
-        self._setup_tv_client()
 
         # Connect to MQTT broker with retry
         mqtt_config = self.config.get("mqtt", {})
