@@ -313,3 +313,37 @@ def test_get_token_requires_keyword_host_port(tmp_path):
     assert storage.get_token(host="10.0.0.50", port=36669) is not None
     # The old positional bug (host lands in device_id slot) finds nothing.
     assert storage.get_token("10.0.0.50", 36669) is None
+
+
+def test_bundled_remote_ca_is_loadable_public_cert():
+    """The shipped RemoteCA must exist and be a usable CA cert (no private key)."""
+    import ssl
+
+    from pyvidaa.certs import bundled_ca_path
+
+    ca = bundled_ca_path()
+    assert ca is not None, "remote_ca.pem should be bundled with the package"
+
+    text = open(ca, encoding="utf-8").read()
+    assert "BEGIN CERTIFICATE" in text
+    assert "PRIVATE KEY" not in text  # must never ship a private key
+
+    # A real SSL context can load it as a trust anchor.
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    ctx.load_verify_locations(ca)
+
+
+def test_server_verify_args_opt_in(monkeypatch):
+    """verify_ssl gates whether the RemoteCA is used for server verification."""
+    import ssl
+
+    from pyvidaa.certs import bundled_ca_path
+
+    # Avoid any real network/protocol detection during construction.
+    monkeypatch.setattr("pyvidaa.client.detect_protocol", lambda *a, **k: None)
+
+    off = HisenseTV("10.0.0.50", use_ssl=False, enable_persistence=False, verify_ssl=False)
+    assert off._server_verify_args() == (None, ssl.CERT_NONE)
+
+    on = HisenseTV("10.0.0.50", use_ssl=False, enable_persistence=False, verify_ssl=True)
+    assert on._server_verify_args() == (bundled_ca_path(), ssl.CERT_REQUIRED)

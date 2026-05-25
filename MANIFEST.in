@@ -1,2 +1,5 @@
 # Keep the test suite out of the source distribution.
 prune tests
+
+# Ship the public RemoteCA cert used for opt-in server verification.
+include pyvidaa/remote_ca.pem

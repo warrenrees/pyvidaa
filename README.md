@@ -72,6 +72,19 @@ The keystore password and further APK details are documented in
 [`VIDAA_PROTOCOL_ANALYSIS.md`](VIDAA_PROTOCOL_ANALYSIS.md). The certificate remains
 the property of its owner and is not redistributed by this project.
 
+### Server certificate verification (optional)
+
+The TV's own (self-signed) server certificate is issued by the same private
+`RemoteCA` root. That root is a public certificate with no private key, so it
+**is** shipped with pyvidaa. By default server verification is off (`verify_ssl=False`),
+matching the official app's behavior. Pass `verify_ssl=True` to validate the TV's
+certificate against the bundled RemoteCA (the hostname check is always skipped,
+since the certificate's CN is `RemoteCA` rather than the TV's IP):
+
+```python
+tv = HisenseTV("192.168.1.50", certfile=..., keyfile=..., verify_ssl=True)
+```
+
 ## Quick Start
 
 ### 1. Prerequisites

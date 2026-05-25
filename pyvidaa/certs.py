@@ -28,6 +28,16 @@ USER_CERT_DIR = Path.home() / ".config" / "pyvidaa" / "certs"
 # non-existent site-packages/certs for installed wheels, where it simply misses.
 _DEV_CERT_DIR = Path(__file__).resolve().parent.parent / "certs"
 
+# The RemoteCA root used to verify the TV's (self-signed) server certificate.
+# Unlike the client key, this is a public CA certificate with no private key, so
+# it IS shipped with the package. Used only when verify_ssl=True.
+BUNDLED_CA = Path(__file__).resolve().parent / "remote_ca.pem"
+
+
+def bundled_ca_path() -> Optional[str]:
+    """Return the path to the bundled RemoteCA cert, or None if unavailable."""
+    return str(BUNDLED_CA) if BUNDLED_CA.is_file() else None
+
 MISSING_CERT_HELP = (
     "Vidaa client certificate not found. pyvidaa does not ship the certificate; "
     f"place '{DEFAULT_CERT_FILENAME}' and '{DEFAULT_KEY_FILENAME}' in "

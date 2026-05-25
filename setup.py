@@ -21,6 +21,7 @@ setup(
         "Changelog": "https://github.com/warrenrees/pyvidaa/blob/main/CHANGELOG.md",
     },
     packages=find_packages(exclude=["tests", "tests.*"]),
+    package_data={"pyvidaa": ["remote_ca.pem"]},
     classifiers=[
         "Development Status :: 5 - Production/Stable",
         "Intended Audience :: Developers",

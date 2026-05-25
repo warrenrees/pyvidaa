@@ -23,7 +23,7 @@ from .config import (
     TokenStorage,
     get_storage,
 )
-from .certs import MISSING_CERT_HELP, resolve_client_certs
+from .certs import MISSING_CERT_HELP, bundled_ca_path, resolve_client_certs
 from .credentials import generate_credentials, generate_credentials_static
 from .keys import ALL_KEYS
 from .protocol import AuthMethod, detect_protocol, get_auth_method, get_auth_method_order
@@ -93,7 +93,10 @@ class HisenseTV:
             password: MQTT password (default 'multimqttservice')
             client_id: Client identifier for MQTT topics
             use_ssl: Enable SSL/TLS connection
-            verify_ssl: Verify SSL certificate (set False for self-signed)
+            verify_ssl: When True, validate the TV's server certificate against
+                the bundled RemoteCA root (hostname check is always skipped, as
+                the cert CN is "RemoteCA"). Default False keeps the historic
+                no-verification behavior for these self-signed, on-LAN certs.
             certfile: Path to client certificate file (PEM format)
             keyfile: Path to client private key file (PKCS8 format)
             enable_persistence: Save/load auth tokens for automatic reconnection
@@ -253,13 +256,16 @@ class HisenseTV:
                 cert, key = self._certs
                 # Using client certs - also need username/password
                 self._client.username_pw_set(self._username, self._password)
+                ca_certs, cert_reqs = self._server_verify_args()
                 self._client.tls_set(
-                    ca_certs=None,
+                    ca_certs=ca_certs,
                     certfile=cert,
                     keyfile=key,
-                    cert_reqs=ssl.CERT_NONE,
+                    cert_reqs=cert_reqs,
                     tls_version=ssl.PROTOCOL_TLS,
                 )
+                # Always skip hostname checking: the TV's cert CN is "RemoteCA",
+                # not its IP. When verifying, the chain is still validated.
                 self._client.tls_insecure_set(True)
             else:
                 # No client cert found. Mutual TLS is required by some protocol
@@ -274,6 +280,23 @@ class HisenseTV:
         else:
             # No SSL - use username/password
             self._client.username_pw_set(self._username, self._password)
+
+    def _server_verify_args(self):
+        """Return (ca_certs, cert_reqs) for the mutual-TLS handshake.
+
+        When verify_ssl is set, validate the TV's server certificate against the
+        bundled RemoteCA root; otherwise skip server verification (the historic
+        default, since these certs are self-signed and on the local network).
+        """
+        if self.verify_ssl:
+            ca = bundled_ca_path()
+            if ca:
+                return ca, ssl.CERT_REQUIRED
+            _LOGGER.warning(
+                "verify_ssl=True but bundled RemoteCA was not found; "
+                "falling back to no server verification."
+            )
+        return None, ssl.CERT_NONE
 
     def _load_saved_credentials(self) -> Optional[dict]:
         """Load saved credentials from storage for reconnection.
@@ -438,11 +461,12 @@ class HisenseTV:
                 if self._certs:
                     cert, key = self._certs
                     self._client.username_pw_set(self._username, self._password)
+                    ca_certs, cert_reqs = self._server_verify_args()
                     self._client.tls_set(
-                        ca_certs=None,
+                        ca_certs=ca_certs,
                         certfile=cert,
                         keyfile=key,
-                        cert_reqs=ssl.CERT_NONE,
+                        cert_reqs=cert_reqs,
                         tls_version=ssl.PROTOCOL_TLS,
                     )
                     self._client.tls_insecure_set(True)
