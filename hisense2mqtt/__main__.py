@@ -6,8 +6,30 @@ import logging
 import sys
 
 from . import __version__
-from .bridge import HisenseMQTTBridge
-from .config import load_config, validate_config
+from .bridge import HisenseMQTTMultiBridge
+from .config import expand_tv_configs, load_config
+
+
+def validate_all(config: dict, scoped: list[dict]) -> list[str]:
+    """Validate the broker and every configured TV with actionable messages."""
+    errors = []
+    if not config.get("mqtt", {}).get("host"):
+        errors.append("mqtt.host is required")
+    if not scoped:
+        errors.append(
+            "No TVs configured - add a 'tvs:' mapping (or legacy 'tv:' section)"
+        )
+    for sc in scoped:
+        tv = sc.get("tv", {})
+        host = tv.get("host")
+        if not host:
+            errors.append("A TV entry is missing 'host'")
+        elif not tv.get("uuid"):
+            errors.append(
+                f"{host}: no paired UUID - pair it first with "
+                f"'tv --ip {host} auth pair'"
+            )
+    return errors
 
 
 def setup_logging(level: str = "INFO"):
@@ -69,8 +91,11 @@ def main():
     config_path = config.get("_config_path", "defaults")
     logger.info(f"Loaded config from: {config_path}")
 
+    # Expand to one scoped config per TV (supports multi-TV 'tvs:' and legacy 'tv:')
+    scoped = expand_tv_configs(config)
+
     # Validate config
-    errors = validate_config(config)
+    errors = validate_all(config, scoped)
     if errors:
         for error in errors:
             logger.error(f"Config error: {error}")
@@ -81,19 +106,21 @@ def main():
     if args.validate:
         print("Configuration is valid")
         print(f"  MQTT Broker: {config['mqtt']['host']}:{config['mqtt']['port']}")
-        print(f"  TV Host: {config['tv']['host']}:{config['tv']['port']}")
-        print(f"  TV Name: {config['tv']['name']}")
-        print(f"  TV UUID: {config['tv']['uuid']}")
-        print(f"  TV MAC: {config['tv'].get('mac', 'not set')}")
-        print(f"  Poll Interval: {config['options']['poll_interval']}s")
-        print(f"  Discovery: {config['options']['discovery']}")
-        print(f"  Wake-on-LAN: {config['options']['wake_on_lan']}")
+        print(f"  TVs: {len(scoped)}")
+        for sc in scoped:
+            tv = sc["tv"]
+            print(f"    - {tv.get('name', 'Hisense TV')} @ {tv['host']}:{tv.get('port', 36669)}")
+            print(f"        UUID: {tv.get('uuid')}  MAC: {tv.get('mac', 'not set')}")
+        opts = config.get("options", {})
+        print(f"  Poll Interval: {opts.get('poll_interval', 30)}s")
+        print(f"  Discovery: {opts.get('discovery', True)}")
+        print(f"  Wake-on-LAN: {opts.get('wake_on_lan', True)}")
         sys.exit(0)
 
-    # Start bridge
-    logger.info(f"hisense2mqtt v{__version__} starting...")
+    # Start bridge(s)
+    logger.info(f"hisense2mqtt v{__version__} starting ({len(scoped)} TV(s))...")
 
-    bridge = HisenseMQTTBridge(config)
+    bridge = HisenseMQTTMultiBridge(config)
 
     try:
         bridge.run_forever()

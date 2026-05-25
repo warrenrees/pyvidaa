@@ -16,7 +16,7 @@ from hisense_tv.client import HisenseTV
 from hisense_tv.wol import wake_tv
 from hisense_tv.keys import ALL_KEYS
 
-from .config import get_device_id, load_config, validate_config
+from .config import expand_tv_configs, get_device_id, load_config, validate_config
 from .discovery import generate_all_discoveries, remove_all_discoveries
 
 logger = logging.getLogger(__name__)
@@ -569,6 +569,73 @@ class HisenseMQTTBridge:
         self.start()
 
         # Keep running
+        try:
+            while self.running:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            pass
+        finally:
+            self.stop()
+
+
+class HisenseMQTTMultiBridge:
+    """Run one HisenseMQTTBridge per configured TV.
+
+    Each TV gets its own scoped config (unique device_id, broker client_id,
+    LWT and topic namespace), so a single broker can expose several TVs as
+    separate Home Assistant devices.
+    """
+
+    def __init__(self, config: dict):
+        """Initialize a bridge per TV found in the config."""
+        self.scoped_configs = expand_tv_configs(config)
+        self.bridges = [HisenseMQTTBridge(cfg) for cfg in self.scoped_configs]
+        self.running = False
+        self._threads: list[threading.Thread] = []
+
+    def _tv_host(self, bridge: HisenseMQTTBridge) -> str:
+        return bridge.config.get("tv", {}).get("host", "?")
+
+    def _start_bridge(self, bridge: HisenseMQTTBridge):
+        """Start one bridge, isolating failures so one TV can't stop the rest."""
+        try:
+            bridge.start()
+        except Exception as e:
+            logger.error("Failed to start bridge for %s: %s", self._tv_host(bridge), e)
+
+    def start(self):
+        """Start all bridges concurrently (each may block on broker/TV connect)."""
+        logger.info("Starting %d TV bridge(s)...", len(self.bridges))
+        self.running = True
+        for bridge in self.bridges:
+            thread = threading.Thread(
+                target=self._start_bridge, args=(bridge,), daemon=True
+            )
+            thread.start()
+            self._threads.append(thread)
+
+    def stop(self):
+        """Stop all bridges."""
+        logger.info("Stopping all TV bridges...")
+        self.running = False
+        for bridge in self.bridges:
+            try:
+                bridge.stop()
+            except Exception:
+                pass
+
+    def run_forever(self):
+        """Run all bridges until interrupted."""
+        def signal_handler(signum, frame):
+            logger.info(f"Received signal {signum}")
+            self.stop()
+            sys.exit(0)
+
+        signal.signal(signal.SIGINT, signal_handler)
+        signal.signal(signal.SIGTERM, signal_handler)
+
+        self.start()
+
         try:
             while self.running:
                 time.sleep(1)

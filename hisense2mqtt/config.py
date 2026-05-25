@@ -44,6 +44,67 @@ def deep_merge(base: dict, override: dict) -> dict:
     return result
 
 
+def _resolve_uuid(entry: dict, host: Optional[str], port: int) -> Optional[str]:
+    """Resolve the credential UUID for a TV.
+
+    Order: explicit `uuid`, the entry `mac`, then the uuid persisted in
+    tokens.json when the TV was paired via the CLI / Vidaa app.
+    """
+    uuid = entry.get("uuid") or entry.get("mac")
+    if uuid or not host:
+        return uuid
+    try:
+        from hisense_tv.config import get_storage
+
+        token = get_storage().get_token(host=host, port=port)
+        if token:
+            return token.get("uuid")
+    except Exception:
+        pass
+    return None
+
+
+def _scoped_tv(entry: dict, key: Optional[str] = None) -> dict:
+    """Build a singular `tv:` section from a multi-TV entry (or singular dict)."""
+    host = entry.get("host") or key
+    port = entry.get("port", 36669)
+    return {
+        "host": host,
+        "port": port,
+        "mac": entry.get("mac"),
+        "uuid": _resolve_uuid(entry, host, port),
+        "name": entry.get("name") or entry.get("alias") or "Hisense TV",
+        "brand": entry.get("brand", "his"),
+    }
+
+
+def expand_tv_configs(config: dict) -> list[dict]:
+    """Expand a loaded config into one scoped single-TV config per TV.
+
+    Supports both the multi-TV schema (`tvs:` mapping, used by the CLI/library
+    and config.example.yaml) and the legacy singular `tv:` section. Each result
+    is a self-contained config of shape {mqtt, options, tv, _config_path} that
+    the bridge and discovery code can consume unchanged.
+    """
+    base = {
+        "mqtt": config.get("mqtt", {}),
+        "options": config.get("options", {}),
+        "_config_path": config.get("_config_path"),
+    }
+
+    tvs = config.get("tvs")
+    scoped: list[dict] = []
+    if isinstance(tvs, dict) and tvs:
+        for key, entry in tvs.items():
+            if isinstance(entry, dict):
+                scoped.append({**base, "tv": _scoped_tv(entry, key)})
+    elif config.get("tv", {}).get("host"):
+        # Legacy singular tv: section - use as-is.
+        scoped.append({**base, "tv": config.get("tv", {})})
+
+    return scoped
+
+
 def load_config(config_path: Optional[str] = None) -> dict:
     """Load configuration from YAML file.
 
