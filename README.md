@@ -1,19 +1,19 @@
 # pyvidaa
 
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
-[![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Python library and Home Assistant integration for Hisense/Vidaa Smart TV control. Two integration options available:
+Python library (`pyvidaa`) and Docker MQTT bridge (`hisense2mqtt`) for controlling
+Hisense/Vidaa Smart TVs over MQTT.
 
-1. **Custom Component** (Recommended) - Native Home Assistant integration with SSDP auto-discovery
-2. **MQTT Bridge** - Docker-based bridge for MQTT-based home automation setups
+> **Home Assistant users:** the native HA custom component now lives in its own repository,
+> [**ha_vidaa_tv**](https://github.com/warrenrees/ha_vidaa_tv) (installable via HACS). This
+> repository is the underlying library and the standalone MQTT bridge.
 
 > **Disclaimer:** pyvidaa is an independent, community-maintained project and is not affiliated with, endorsed by, or sponsored by Hisense or VIDAA. "VIDAA" and "Hisense" are trademarks of their respective owners; their use here is purely descriptive.
 
 ## Features
 
-- **Home Assistant Custom Component** with config flow UI
 - **SSDP Auto-Discovery** - TVs automatically detected on network
 - **PIN Pairing** - Secure authentication via TV screen
 - Control Hisense/Vidaa TVs via MQTT (optional bridge mode)
@@ -128,9 +128,10 @@ View logs:
 docker compose logs -f
 ```
 
-### 4. Home Assistant
+### 4. Home Assistant (via the MQTT bridge)
 
-The TV will automatically appear in Home Assistant via MQTT discovery. You'll get:
+With the bridge running, the TV automatically appears in Home Assistant via MQTT discovery
+— no custom component required. You'll get:
 
 - **Media Player** entity with power, volume, source controls
 - **Navigation Buttons** for remote control
@@ -271,7 +272,7 @@ See [docs/API.md](docs/API.md) for full API reference.
 
 - [API Reference](docs/API.md)
 - [Configuration Reference](docs/CONFIGURATION.md)
-- [Home Assistant Integration](docs/HOME_ASSISTANT.md)
+- [Home Assistant Integration](https://github.com/warrenrees/ha_vidaa_tv) (separate repository)
 - [MQTT Topics](docs/MQTT_TOPICS.md)
 - [Troubleshooting](docs/TROUBLESHOOTING.md)
 - [Protocol Analysis](VIDAA_PROTOCOL_ANALYSIS.md)
