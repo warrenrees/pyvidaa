@@ -70,9 +70,15 @@ against it directly:
 openssl verify -CAfile certs/remote_ca.pem certs/vidaa_client.pem   # => OK
 ```
 
-The `.bks` is a BKS v1 store (SHA-1 HMAC, 1904 iterations). Its entries — including
-the embedded X.509 cert — are stored in cleartext, so the truststore can be parsed
-without the JVM/BouncyCastle by locating the `00 05 "X.509"` length-prefixed blocks.
+The `.bks` is a BKS v1 store (SHA-1 HMAC, 1904 iterations). Its single entry is a
+`BksTrustedCertEntry` (alias `mykey`, no private key), stored in cleartext, so the
+truststore can be parsed without the JVM/BouncyCastle by locating the
+`00 05 "X.509"` length-prefixed blocks. **Its integrity password is `multiscreen123`**
+(`getClientKeyPass`), confirmed by opening it with `pyjks`:
+```python
+import jks
+jks.bks.BksKeyStore.load("res/dM.bks", "multiscreen123")   # opens; entry alias "mykey"
+```
 
 ### Credentials (from `libmqttcrypt.so`)
 
@@ -84,15 +90,44 @@ static MQTT login; the others are **TLS keystore passphrases**, not MQTT creds:
 |------------|-------|------|
 | `getUserName` | `hisenseservice` (b64 `aGlzZW5zZXNlcnZpY2U=`) | static MQTT username |
 | `getUserPass` | `multimqttservice` (b64 `bXVsdGltcXR0c2VydmljZQ==`) | static MQTT password |
-| `getClientKeyPass` | `multiscreen123` (b64 `bXVsdGlzY3JlZW4xMjM=`) | legacy client key passphrase |
-| `getNewClientKeyPass` | `ayd6afbj2huf3` (b64 `YXlkNmFmYmoyaHVmMw==`) | client key passphrase |
-| `getNewClientP12Password` | `186e990688070325a1c4b0ce275d2388` | **P12 store password** for the client keystore (`3R.p12`) |
-| `getNewClientKeyPassword` | (runtime) | private-key bag passphrase inside the keystore |
+| `getClientKeyPass` | `multiscreen123` (b64 `bXVsdGlzY3JlZW4xMjM=`) | **BKS truststore password** (`dM.bks`) |
+| `getNewClientKeyPass` | `ayd6afbj2huf3` (b64 `YXlkNmFmYmoyaHVmMw==`) | unused for shipped keystores |
+| `getNewClientP12Password` | `186e990688070325a1c4b0ce275d2388` | **P12 store password** (`3R.p12`); opens store + key bag + MAC |
+| `getNewClientKeyPassword` | `441a14046a67f604bb7cdb85b6783c0f` ⚠ reconstructed | intended client key-entry password; unused for shipped keystores |
 
-> The last two getters return an obfuscated 32-byte seed from `.rodata` that the
-> (Baidu-packed) Java layer transforms into the final string at runtime; the
-> `186e99…` value is the empirically-confirmed password (it decrypts `3R.p12`),
-> captured via logcat rather than reconstructed from the seed statically.
+#### Verified password → keystore matrix
+
+Tested with `cryptography`/`openssl` (PKCS12) and `pyjks` (BKS):
+
+| Getter / value | p12 store+MAC | p12 key bag | BKS truststore |
+|----------------|:--:|:--:|:--:|
+| `getClientKeyPass` = `multiscreen123` | ✗ | ✗ | ✓ |
+| `getNewClientKeyPass` = `ayd6afbj2huf3` | ✗ | ✗ | ✗ |
+| `getNewClientP12Password` = `186e99…` | ✓ | ✓ | ✗ |
+| `getNewClientKeyPassword` = `441a…` | ✗ | ✗ | ✗ |
+
+- The PKCS12 client keystore (`3R.p12`) uses a **single** password (`186e99…`) for the
+  store, the shrouded key bag, and the MAC.
+- The BKS truststore (`dM.bks`) uses `multiscreen123`.
+- `ayd6afbj2huf3` and `441a…` unlock **nothing** in the shipped keystores — they appear
+  vestigial (likely leftover from when store/key passwords were separate).
+
+#### Note on the obfuscated getters and the `441a…` reconstruction
+
+`getNewClientP12Password` and `getNewClientKeyPassword` are byte-identical functions
+that each `NewStringUTF`-return a fixed 32-byte **obfuscated seed** from `.rodata`
+(`GPB\x13OOHB…` and `DDG\x17GDHDB…` respectively); the seed→string transform runs in
+the Baidu-packed Java.
+
+- `186e99…` is **empirically confirmed** — it decrypts `3R.p12` (and was also seen via
+  logcat). It is *not* a simple MD5/XOR of its seed.
+- `441a14046a67f604bb7cdb85b6783c0f` is **reconstructed, not 100% confirmed.** Using the
+  known (p12 seed → `186e99…`) pair, the transform is a bijection over a 16-symbol
+  alphabet → the 16 hex digits. 15 of 16 symbols are observed directly; the key seed's
+  one new symbol (`0x12`) maps to the one unassigned digit (`f`) by elimination.
+  It reproduces `186e99…` exactly but cannot be ground-truth-verified because no shipped
+  artifact is encrypted with it. **Definitive confirmation requires a runtime hook**
+  (Frida/logcat) on `ConnectUtils.getNewClientKeyPassword()`.
 
 **Dynamic Credentials (newer VIDAA TVs - REQUIRED):**
 
