@@ -54,6 +54,8 @@ certs/
 
 # APK decompilation reference (not for distribution)
 vidaa_decompiled/
+vidaa_decompiled-*/
+*.apk
 
 # Test/Coverage
 .coverage
