@@ -853,3 +853,21 @@ def test_probe_still_rejects_non_vidaa_media_renderers():
     with patch("urllib.request.urlopen",
                return_value=_mock_urlopen_returning(SONOS_DESCRIPTOR)):
         assert probe_ip("192.168.67.248", timeout=1) is None
+
+
+def test_probe_reports_both_interface_macs():
+    """Wake-on-LAN must target the interface the TV is actually using.
+
+    The descriptor does not say which that is, so both are surfaced and the
+    owner picks - a magic packet to the wrong one silently wakes nothing.
+    """
+    from pyvidaa.discovery import probe_ip
+
+    with patch("urllib.request.urlopen",
+               return_value=_mock_urlopen_returning(LEGACY_DESCRIPTOR)):
+        device = probe_ip("192.168.67.28", timeout=1)
+
+    assert device.mac_ethernet == "a0:62:fb:66:77:ca"
+    assert device.mac_wifi == "f0:35:75:29:5a:e0"
+    # The preferred MAC stays the ethernet one, as before.
+    assert device.mac == device.mac_ethernet

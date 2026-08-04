@@ -61,7 +61,12 @@ class DiscoveredTV:
     name: Optional[str] = None
     model: Optional[str] = None
     brand: Optional[str] = None
+    # The preferred MAC (ethernet, else wifi). The per-interface values below
+    # are kept separately because Wake-on-LAN must target whichever interface
+    # the TV is actually connected on, which the descriptor does not say.
     mac: Optional[str] = None
+    mac_ethernet: Optional[str] = None
+    mac_wifi: Optional[str] = None
     protocol_version: Optional[str] = None
     location: Optional[str] = None
     usn: Optional[str] = None
@@ -80,6 +85,13 @@ class DiscoveredTV:
             parts.append(f", mac={self.mac!r}")
         parts.append(f", source={self.source!r})")
         return "".join(parts)
+
+
+def _format_mac(mac: Optional[str]) -> Optional[str]:
+    """Normalise a flat 12-hex-char MAC to colon-separated form."""
+    if mac and ':' not in mac and len(mac) == 12:
+        return ':'.join(mac[i:i + 2] for i in range(0, 12, 2))
+    return mac
 
 
 def get_local_ips() -> Set[str]:
@@ -501,9 +513,12 @@ def _probe_ip_port(
         if not mac:
             mac = mac_eth or mac_wifi
 
-        # Format MAC address with colons if needed
-        if mac and ':' not in mac and len(mac) == 12:
-            mac = ':'.join(mac[i:i+2] for i in range(0, 12, 2))
+        # Format MAC addresses with colons if needed. Both interfaces are kept:
+        # Wake-on-LAN has to target whichever one the TV is actually using, and
+        # only the owner knows which that is.
+        mac = _format_mac(mac)
+        mac_eth = _format_mac(mac_eth)
+        mac_wifi = _format_mac(mac_wifi)
 
         # Only consider VIDAA devices. Older firmware reports vidaa_support=0
         # while still speaking the protocol, so transport_protocol also counts:
@@ -528,6 +543,8 @@ def _probe_ip_port(
             model=model,
             brand=raw_data.get('brand'),
             mac=mac,
+            mac_ethernet=mac_eth,
+            mac_wifi=mac_wifi,
             protocol_version=raw_data.get('transport_protocol'),
             source="probe",
             discovery_method="upnp_probe",

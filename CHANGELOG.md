@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.3] - 2026-08-04
+
+### Added
+
+- `DiscoveredTV` now exposes `mac_ethernet` and `mac_wifi` alongside the
+  preferred `mac`. The descriptor does not say which interface the TV is
+  actually connected on, and Wake-on-LAN only reaches that one, so callers need
+  both to offer a choice rather than guessing.
+
 ## [2.2.2] - 2026-08-04
 
 ### Changed
