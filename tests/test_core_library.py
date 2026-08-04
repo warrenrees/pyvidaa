@@ -871,3 +871,188 @@ def test_probe_reports_both_interface_macs():
     assert device.mac_wifi == "f0:35:75:29:5a:e0"
     # The preferred MAC stays the ethernet one, as before.
     assert device.mac == device.mac_ethernet
+
+
+# --- get_state must detect a RESPONSE, not a change ------------------------
+
+def _state_msg(payload: bytes):
+    msg = MagicMock()
+    msg.topic = "/remoteapp/mobile/broadcast/ui_service/state"
+    msg.payload = payload
+    return msg
+
+
+def test_get_state_returns_none_when_the_tv_goes_silent():
+    """A TV switched off stops answering while the socket stays open.
+
+    Regression: get_state() waited for the payload to CHANGE and returned the
+    last known state on timeout, so Home Assistant kept reporting the TV as on
+    for ~2 minutes after it was switched off - until the MQTT keepalive finally
+    noticed. Returning None is what lets a caller tell "gone" from "unchanged".
+    """
+    client = _make_client(auth_method=AuthMethod.STATIC)
+    client._connected = True
+    client._publish = lambda topic, payload="": True
+
+    # The TV had answered earlier, so a stale state is cached.
+    client._on_message(None, None, _state_msg(b'{"statetype": "sourceswitch"}'))
+    assert client._state == {"statetype": "sourceswitch"}
+
+    # Now it answers nothing at all.
+    assert client.get_state(timeout=0.3) is None
+    # ...and the cache is left intact for anything that wants the last value.
+    assert client._state == {"statetype": "sourceswitch"}
+
+
+def test_get_state_returns_promptly_when_the_state_is_unchanged():
+    """An idle TV reports the same payload every time; that is still a reply.
+
+    Regression: waiting for a *change* meant every poll against a healthy but
+    idle TV burned the full timeout - the bulk of a 9-second update cycle.
+    """
+    import time as _time
+
+    client = _make_client(auth_method=AuthMethod.STATIC)
+    client._connected = True
+    unchanged = b'{"statetype": "sourceswitch", "sourceid": "HDMI2"}'
+
+    client._on_message(None, None, _state_msg(unchanged))
+
+    def answer(topic, payload=""):
+        client._on_message(None, None, _state_msg(unchanged))
+        return True
+
+    client._publish = answer
+
+    started = _time.monotonic()
+    state = client.get_state(timeout=3.0)
+    elapsed = _time.monotonic() - started
+
+    assert state == {"statetype": "sourceswitch", "sourceid": "HDMI2"}
+    assert elapsed < 0.5, f"took {elapsed:.2f}s; it used to take the full timeout"
+
+
+def test_power_off_does_not_toggle_a_tv_that_is_not_answering():
+    """KEY_POWER is a toggle, so an unknown state must not be guessed at."""
+    client = _make_client(auth_method=AuthMethod.STATIC)
+    client._connected = True
+    sent = []
+    client._publish = lambda topic, payload="": sent.append(topic) or True
+
+    assert client.power_off() is False
+    assert not any("sendkey" in topic for topic in sent)
+
+
+def test_power_on_still_sends_the_key_when_the_tv_is_silent():
+    """A silent TV is almost certainly off, and that is exactly when to wake it."""
+    client = _make_client(auth_method=AuthMethod.STATIC)
+    client._connected = True
+    sent = []
+    client._publish = lambda topic, payload="": sent.append(topic) or True
+
+    assert client.power_on() is True
+    assert any("sendkey" in topic for topic in sent)
+
+
+def test_disconnect_code_16_is_reported_as_a_keepalive_timeout(caplog):
+    """Code 16 is a silent peer, not a client-id clash - the old message lied."""
+    import logging
+
+    client = _make_client(auth_method=AuthMethod.STATIC)
+    client._connected = True
+
+    with caplog.at_level(logging.WARNING, logger="pyvidaa.client"):
+        client._on_disconnect(None, None, 16)
+
+    assert "keepalive timeout" in caplog.text
+    assert "same MQTT client id" not in caplog.text
+
+
+def test_keepalive_is_short_enough_to_notice_a_vanished_tv():
+    """60s meant ~90s before paho gave up on a TV that was switched off."""
+    from pyvidaa.config import DEFAULT_KEEPALIVE
+
+    assert DEFAULT_KEEPALIVE <= 30
+
+
+# --- the TV's own standby announcement -------------------------------------
+
+def test_tvsleep_announcement_is_treated_as_powered_off():
+    """The TV pushes tvsleep the moment it goes to standby.
+
+    Regression: pyvidaa never subscribed to it, so the ONLY evidence this
+    firmware gives that it is going away was missed entirely - it does not
+    broadcast a fake_sleep_0 state, it just stops answering. The known-working
+    integration keys its OFF state off exactly this topic.
+    """
+    client = _make_client(auth_method=AuthMethod.STATIC)
+    pushed = []
+    client.on_state_change = pushed.append
+
+    msg = MagicMock()
+    msg.topic = "/remoteapp/mobile/broadcast/platform_service/actions/tvsleep"
+    msg.payload = b""  # no payload at all
+
+    client._on_message(None, None, msg)
+
+    assert client._state == {"statetype": "fake_sleep_0"}
+    assert pushed == [{"statetype": "fake_sleep_0"}]
+    # A get_state() already waiting is released with the sleep state.
+    assert client._state_event.is_set()
+
+
+def test_client_subscribes_to_the_standby_topic_on_connect():
+    client = _make_client(auth_method=AuthMethod.STATIC)
+    client._client = MagicMock()
+
+    client._on_connect(None, None, {}, 0)
+
+    subscribed = {call.args[0] for call in client._client.subscribe.call_args_list}
+    assert "/remoteapp/mobile/broadcast/platform_service/actions/tvsleep" in subscribed
+    # The duplicate state subscription was dead weight.
+    state_subs = [s for s in subscribed if s.endswith("/broadcast/ui_service/state")]
+    assert len(state_subs) == 1
+
+
+def test_state_cache_is_dropped_when_the_tv_disconnects():
+    """Everything cached was learned before the TV went away."""
+    client = _make_client(auth_method=AuthMethod.STATIC)
+    client._connected = True
+    client._on_message(None, None, _state_msg(b'{"statetype": "sourceswitch"}'))
+    assert client._state
+
+    client._on_disconnect(None, None, 16)
+
+    assert client._state == {}
+
+
+def test_clear_saved_token_actually_clears(tmp_path):
+    """Regression: the arguments were passed positionally, so delete_token
+    bound the host to device_id and the port to host, matched nothing, and
+    reported success while leaving the stale pairing in place."""
+    storage = TokenStorage(tmp_path / "tokens.json")
+    storage.save_token(
+        device_id="10.0.0.50:36669",
+        host="10.0.0.50",
+        port=36669,
+        client_id=DEFAULT_CLIENT_ID,
+        mqtt_username=DEFAULT_MQTT_USERNAME,
+        auth_method="static",
+    )
+
+    client = VidaaTV(host="10.0.0.50", port=36669, use_ssl=False,
+                     storage=storage, enable_persistence=True,
+                     **auth_mode_kwargs("static"))
+    client.clear_saved_token()
+
+    assert storage.get_token(host="10.0.0.50", port=36669) is None
+
+
+def test_delete_token_reports_whether_it_removed_anything(tmp_path):
+    """So callers stop printing success unconditionally."""
+    storage = TokenStorage(tmp_path / "tokens.json")
+    assert storage.delete_token(host="10.0.0.50", port=36669) is False
+
+    storage.save_token(device_id="10.0.0.50:36669", host="10.0.0.50", port=36669,
+                       access_token="X")
+    assert storage.delete_token(host="10.0.0.50", port=36669) is True

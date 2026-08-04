@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.4] - 2026-08-04
+
+### Fixed
+
+- **`get_state()` could not report that the TV had gone away.** It waited for
+  the payload to *change* rather than for the TV to *respond*, and returned the
+  last known state on timeout - so a TV that had been switched off kept
+  reporting whatever it was last doing. Home Assistant showed such a TV as on
+  for around two minutes, until the MQTT keepalive expired and a reconnect
+  finally failed. It now returns `None` when the TV does not answer, which is
+  distinct from an empty state.
+- **Every poll against a healthy but idle TV cost the full timeout.** An idle
+  TV reports an identical payload each time, which the change-detection above
+  could not tell apart from silence. Polls drop from ~3s to ~0.1s.
+- **The TV's own standby announcement was ignored.** Pre-dynamic firmware
+  publishes to `/remoteapp/mobile/broadcast/platform_service/actions/tvsleep`
+  the instant it powers off - including from the physical remote - and sends
+  nothing else to say so. That topic was never subscribed to; it now is, and is
+  surfaced as a `fake_sleep_0` state through the usual `on_state_change`
+  callback.
+- The cached state is dropped on disconnect, so a reconnect cannot resurrect a
+  stale "on".
+- `clear_saved_token()` (and `tv auth clear`) passed host/port positionally into
+  `delete_token`, whose first parameter is `device_id` - so they matched nothing
+  and silently deleted nothing while reporting success. `delete_token()` now
+  returns whether it removed a record, and the CLI reports accordingly.
+- The MQTT keepalive drops from 60s to 20s (`DEFAULT_KEEPALIVE`), so a TV that
+  vanishes without closing its connection is noticed in ~30s rather than ~90s.
+- An unexpected disconnect now names the actual reason. Code 16 is a keepalive
+  timeout - a TV switched off without closing the socket - and was being
+  reported as a probable client-id collision.
+- Removed a duplicate subscription to the state broadcast topic.
+
 ## [2.2.3] - 2026-08-04
 
 ### Added

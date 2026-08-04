@@ -12,6 +12,7 @@ Provides:
 from .constants import (
     # Network
     DEFAULT_PORT,
+    DEFAULT_KEEPALIVE,
     DISCOVERY_PORT,
     SSDP_ADDR,
     SSDP_PORT,
@@ -92,6 +93,7 @@ from .storage import (
 __all__ = [
     # Constants
     "DEFAULT_PORT",
+    "DEFAULT_KEEPALIVE",
     "DISCOVERY_PORT",
     "SSDP_ADDR",
     "SSDP_PORT",

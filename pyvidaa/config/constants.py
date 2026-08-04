@@ -10,6 +10,13 @@ Consolidates hardcoded values from:
 
 # === Network Ports ===
 DEFAULT_PORT = 36669           # TV MQTT broker port
+
+# === MQTT Connection ===
+# Keepalive in seconds. These TVs vanish from the network when switched off
+# without closing the connection, so this is what bounds how long a dead
+# session looks alive: paho gives up at roughly 1.5x this. The old 60s meant
+# ~90s before a powered-off TV was noticed.
+DEFAULT_KEEPALIVE = 20
 DISCOVERY_PORT = 36671         # Hisense UDP discovery port
 SSDP_PORT = 1900              # Standard SSDP port
 UPNP_PORT = 38400             # UPnP XML descriptor port

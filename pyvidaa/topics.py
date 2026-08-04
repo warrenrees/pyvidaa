@@ -24,6 +24,10 @@ TOPIC_GET_CAPABILITY = "/remoteapp/tv/ui_service/{client}/actions/capability"
 
 # Response topics (subscribe to these)
 TOPIC_STATE_RESPONSE = "/remoteapp/mobile/broadcast/ui_service/state"
+# The TV announces standby here the instant it powers off, including from its
+# own remote. Pre-dynamic firmware sends nothing else to say it is going away:
+# it does not broadcast a fake_sleep_0 state, it simply stops answering.
+TOPIC_TV_SLEEP = "/remoteapp/mobile/broadcast/platform_service/actions/tvsleep"
 TOPIC_VOLUME_RESPONSE = "/remoteapp/mobile/broadcast/ui_service/volume"
 TOPIC_SOURCES_RESPONSE = "/remoteapp/mobile/{client}/ui_service/data/sourcelist"
 TOPIC_APPS_RESPONSE = "/remoteapp/mobile/{client}/ui_service/data/applist"

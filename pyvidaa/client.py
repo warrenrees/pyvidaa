@@ -19,6 +19,7 @@ _LOGGER = logging.getLogger(__name__)
 from .config import (
     AUTH_MODE_DYNAMIC,
     AUTH_MODE_STATIC,
+    DEFAULT_KEEPALIVE,
     DEFAULT_PORT,
     DEFAULT_MQTT_USERNAME,
     DEFAULT_MQTT_PASSWORD,
@@ -52,6 +53,7 @@ from .topics import (
     TOPIC_APPS_RESPONSE,
     TOPIC_SOURCES_RESPONSE,
     TOPIC_STATE_RESPONSE,
+    TOPIC_TV_SLEEP,
     TOPIC_VOLUME_RESPONSE,
     TOPIC_AUTH_RESPONSE,
     TOPIC_AUTH_CODE_RESPONSE,
@@ -177,6 +179,10 @@ class VidaaTV:
         # Set when the TV confirms the PIN dialog is on screen, so pairing can
         # wait for that instead of assuming it worked.
         self._pin_event = threading.Event()
+        # Set whenever a state broadcast arrives, so get_state() can tell "the
+        # TV answered" from "the state happens to be unchanged" - a distinction
+        # the payload alone cannot make.
+        self._state_event = threading.Event()
         # Set once the access token has actually been received and saved, so
         # pairing can wait for persistence instead of returning on PIN-accept.
         self._token_event = threading.Event()
@@ -473,7 +479,7 @@ class VidaaTV:
             self._connected = False
             self._last_connack_rc = None
 
-            self._client.connect(self.host, self.port, keepalive=60)
+            self._client.connect(self.host, self.port, keepalive=DEFAULT_KEEPALIVE)
             self._client.loop_start()
 
             # Wait for connection
@@ -559,7 +565,7 @@ class VidaaTV:
 
             # Try connecting
             try:
-                self._client.connect(self.host, self.port, keepalive=60)
+                self._client.connect(self.host, self.port, keepalive=DEFAULT_KEEPALIVE)
                 self._client.loop_start()
 
                 start = time.time()
@@ -600,6 +606,9 @@ class VidaaTV:
             _LOGGER.info("Connected to TV at %s:%s", self.host, self.port)
             # Subscribe to response topics
             self._client.subscribe(TOPIC_STATE_RESPONSE)
+            # The TV's standby announcement. Without this the only evidence it
+            # has gone is that it stops answering, which takes a poll to notice.
+            self._client.subscribe(TOPIC_TV_SLEEP)
             self._client.subscribe(TOPIC_VOLUME_RESPONSE)
             # Volume change broadcasts (platform_service path)
             self._client.subscribe("/remoteapp/mobile/broadcast/platform_service/actions/volumechange")
@@ -610,7 +619,6 @@ class VidaaTV:
             self._client.subscribe(get_topic(TOPIC_AUTH_RESPONSE, self.client_id))
             self._client.subscribe(get_topic(TOPIC_AUTH_CODE_RESPONSE, self.client_id))
             self._client.subscribe(get_topic(TOPIC_TOKEN_RESPONSE, self.client_id))
-            self._client.subscribe(f"/remoteapp/mobile/broadcast/ui_service/state")
 
             # Subscribe to device info topics
             self._client.subscribe(get_topic(TOPIC_TV_INFO_RESPONSE, self.client_id))
@@ -645,20 +653,35 @@ class VidaaTV:
             except Exception:  # pragma: no cover - defensive
                 pass
 
+    # paho MQTT_ERR_* codes worth explaining when a session drops unexpectedly.
+    _DISCONNECT_REASONS = {
+        1: "protocol error",
+        4: "no connection",
+        7: "connection lost - the TV closed the socket. If this repeats every "
+           "few seconds, another client is probably using the same MQTT "
+           "client id",
+        14: "socket error",
+        16: "keepalive timeout - the TV stopped responding, which is what "
+            "happens when it is switched off without closing the connection",
+    }
+
     def _on_disconnect(self, client, userdata, rc):
         """Handle disconnection callback."""
         was_connected = self._connected
         self._connected = False
+        self._state_event.clear()
+        # Everything we knew was learned before the TV went away, so do not let
+        # a reconnect resurrect a stale "on HDMI2".
+        self._state = {}
         if rc == 0 or not was_connected:
             return
         # An unexpected drop. Log it: without this, a TV that accepts the
-        # connection and then closes it looks like a stream of successful
+        # connection and then goes away looks like a stream of successful
         # "Connected to TV" lines with nothing to explain the repetition.
         _LOGGER.warning(
-            "Disconnected from %s:%s (code %s) - the TV closed the connection. "
-            "If this repeats every few seconds, another client is likely using "
-            "the same MQTT client id %r",
-            self.host, self.port, rc, self._mqtt_client_id,
+            "Disconnected from %s:%s (code %s: %s)",
+            self.host, self.port, rc,
+            self._DISCONNECT_REASONS.get(rc, "unexpected disconnect"),
         )
 
     def _on_message(self, client, userdata, msg):
@@ -667,6 +690,18 @@ class VidaaTV:
         # PIN dialog on screen. It carries an empty payload, so this has to be
         # handled before any JSON parsing - otherwise the one signal that
         # pairing actually started is silently dropped.
+        # The TV telling us it is going to standby. This is the only notice
+        # pre-dynamic firmware gives - it does not broadcast a fake_sleep_0
+        # state, it just stops answering - so synthesise one, which is what
+        # every consumer already understands as "off".
+        if msg.topic.endswith("/platform_service/actions/tvsleep"):
+            _LOGGER.info("TV announced standby")
+            self._state = {"statetype": "fake_sleep_0"}
+            self._state_event.set()
+            if self.on_state_change:
+                self.on_state_change(self._state)
+            return
+
         if msg.topic.endswith("/ui_service/data/authentication"):
             _LOGGER.info("TV is displaying the pairing PIN")
             self._auth_required = True
@@ -718,6 +753,9 @@ class VidaaTV:
             # Handle broadcast state updates (don't trigger response event)
             elif "broadcast" in msg.topic:
                 self._state = payload
+                # Record that the TV answered, even if the payload is identical
+                # to the last one - that is what proves it is still alive.
+                self._state_event.set()
                 # Check if auth is required from state
                 if payload.get("statetype") == "authentication":
                     self._auth_required = True
@@ -1032,9 +1070,15 @@ class VidaaTV:
         return self._auth_required
 
     def clear_saved_token(self):
-        """Clear saved authentication token for this TV."""
+        """Clear saved authentication token for this TV.
+
+        Keyword arguments are required: delete_token's first parameter is
+        device_id, so passing (host, port) positionally bound the host to
+        device_id and the port to host, matched nothing, and silently deleted
+        nothing - while the caller reported success.
+        """
         if self._storage:
-            self._storage.delete_token(self.host, self.port)
+            self._storage.delete_token(host=self.host, port=self.port)
         self._access_token = None
         self._authenticated = False
 
@@ -1114,8 +1158,14 @@ class VidaaTV:
     def power_off(self) -> bool:
         """Turn TV off (only if it's on).
 
+        Reads the state first, because KEY_POWER is a toggle: sending it blind
+        to a TV that is already off would switch it back on. A caller that
+        already knows the TV is on should send the key itself and skip the
+        round-trip.
+
         Returns:
-            True if command sent or TV already off
+            True if command sent or TV already off. False if the state could not
+            be read, in which case nothing was sent.
         """
         state = self.get_state(timeout=3.0)
         if state and state.get("statetype") != "fake_sleep_0":
@@ -1124,8 +1174,9 @@ class VidaaTV:
             _LOGGER.debug("TV is already off.")
             return True
         else:
-            # Couldn't get state, don't send power (might turn it on)
-            _LOGGER.warning("Could not determine TV state.")
+            # No answer: the TV is very likely already off, and KEY_POWER would
+            # toggle it back on.
+            _LOGGER.debug("TV did not report its state; not sending power off.")
             return False
 
     def volume_up(self) -> bool:
@@ -1276,28 +1327,34 @@ class VidaaTV:
     def get_state(self, timeout: float = 5.0) -> Optional[dict]:
         """Get TV state information.
 
-        Note: State comes on broadcast topic, so we trigger a refresh
-        and return the cached state.
+        The state arrives on a broadcast topic, so this publishes gettvstate and
+        waits for the TV to answer.
 
         Returns:
-            State dict or None if failed
+            The current state, or None if the TV did not answer within the
+            timeout.
+
+            None means "no response", which is NOT the same as an empty state:
+            it is how a caller learns the TV has gone away. This used to wait
+            for the payload to *change* and return the last known state on
+            timeout, so a TV that had been switched off kept reporting whatever
+            it was last doing - and an idle TV, whose state is identical every
+            time, cost the full timeout on every single call.
         """
-        # Clear current state to detect fresh update
-        old_state = self._state
+        self._state_event.clear()
 
         # Send request to trigger state broadcast
         topic = get_topic(TOPIC_GET_STATE, self.client_id)
         self._publish(topic, "")
 
-        # Wait for state to be updated via broadcast
-        start = time.time()
-        while time.time() - start < timeout:
-            if self._state and self._state != old_state:
-                return self._state
-            time.sleep(0.1)
+        if self._state_event.wait(timeout):
+            return self._state
 
-        # Return whatever state we have (might be stale)
-        return self._state
+        _LOGGER.debug(
+            "TV did not answer gettvstate within %ss; treating it as unreachable",
+            timeout,
+        )
+        return None
 
     # Device Info
     def get_tv_info(self, timeout: float = 5.0) -> Optional[dict]:

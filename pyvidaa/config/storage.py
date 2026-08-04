@@ -210,13 +210,18 @@ class TokenStorage:
         device_id: Optional[str] = None,
         host: Optional[str] = None,
         port: int = DEFAULT_PORT,
-    ):
+    ) -> bool:
         """Delete stored token for a device.
 
         Args:
             device_id: Device ID (network_type from TV)
             host: TV IP address (fallback for legacy lookup)
             port: TV MQTT port
+
+        Returns:
+            True if a record was removed. Callers should report success on this
+            rather than assuming it, since passing host/port positionally binds
+            them to the wrong parameters and matches nothing.
         """
         data = self._load_all()
         key, _ = self._find_token(device_id, host, port)
@@ -224,6 +229,8 @@ class TokenStorage:
         if key and key in data:
             del data[key]
             self._save_all(data)
+            return True
+        return False
 
     @staticmethod
     def _is_tokenless(token_data: Dict[str, Any]) -> bool:

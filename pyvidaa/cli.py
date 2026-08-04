@@ -823,11 +823,18 @@ def cmd_auth(args):
             return 1
 
     elif args.action == "clear":
+        # Keywords matter: delete_token's first parameter is device_id, so
+        # (host, port) positionally matched nothing and cleared nothing while
+        # still printing success.
         if device_id:
-            storage.delete_token(device_id)
+            cleared = storage.delete_token(device_id=device_id)
         else:
-            storage.delete_token(host, port)
-        print("Stored credentials cleared.")
+            cleared = storage.delete_token(host=host, port=port)
+        print(
+            "Stored credentials cleared."
+            if cleared
+            else "No stored credentials to clear."
+        )
 
     elif args.action == "refresh":
         tv = create_tv_client(tv_id, args.ip, getattr(args, 'auth_mode', None))
