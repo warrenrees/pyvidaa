@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.2] - 2026-08-04
+
+### Changed
+
+- `DEFAULT_CLIENT_ID` is now `pyvidaa`, not `HomeAssistant`, for both the MQTT
+  client id and the topics. `HomeAssistant` is what the widely-used
+  Mosquitto-bridge setups send, and a TV drops the older session whenever a
+  client id is reused, so sharing it meant fighting them for the connection.
+  **Existing pairings are unaffected**: the authorized id is restored from
+  storage, so only newly-paired TVs use the new value.
+
+### Fixed
+
+- `get_token_status()` now reports `tokenless: True` for a static-auth pairing.
+  Its zero expiry otherwise read as "overdue for renewal", so callers retried a
+  token refresh on every poll against firmware that issues no tokens at all.
+
 ## [2.2.1] - 2026-08-04
 
 ### Fixed

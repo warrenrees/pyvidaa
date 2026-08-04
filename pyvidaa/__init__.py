@@ -151,7 +151,7 @@ from .async_client import (
     async_detect_protocol,
 )
 
-__version__ = "2.2.1"
+__version__ = "2.2.2"
 __all__ = [
     "VidaaTV",
     # Power

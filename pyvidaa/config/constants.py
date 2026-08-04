@@ -27,7 +27,12 @@ DEFAULT_MQTT_USERNAME = "hisenseservice"
 DEFAULT_MQTT_PASSWORD = "multimqttservice"
 
 # === Client Identification ===
-DEFAULT_CLIENT_ID = "HomeAssistant"
+# Identifies this library to the TV. Deliberately NOT "HomeAssistant": that is
+# what the widely-used Mosquitto-bridge setups send, and a TV drops the older
+# session whenever a client id is reused, so sharing it would make the two fight
+# over the connection. Existing pairings keep whatever id they were authorized
+# with - it is restored from storage - so this only affects new ones.
+DEFAULT_CLIENT_ID = "pyvidaa"
 DEFAULT_BRAND = "his"
 
 # === Protocol Version Thresholds ===

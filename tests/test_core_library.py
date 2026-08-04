@@ -14,7 +14,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from pyvidaa.client import VidaaTV
-from pyvidaa.config.constants import DEFAULT_MQTT_PASSWORD, DEFAULT_MQTT_USERNAME
+from pyvidaa.config.constants import (
+    DEFAULT_CLIENT_ID,
+    DEFAULT_MQTT_PASSWORD,
+    DEFAULT_MQTT_USERNAME,
+)
 from pyvidaa.config.storage import TokenStorage
 from pyvidaa.credentials import generate_credentials, generate_credentials_static
 from pyvidaa.protocol import (
@@ -81,7 +85,7 @@ def test_static_credentials_match_the_working_bridge_config():
     creds = generate_credentials_static()
     assert creds.username == "hisenseservice"
     assert creds.password == "multimqttservice"
-    assert creds.client_id == "HomeAssistant"
+    assert creds.client_id == DEFAULT_CLIENT_ID
 
 
 def test_static_credentials_are_stable_across_calls():
@@ -204,8 +208,8 @@ def test_static_mode_builds_the_fixed_login_without_probing(monkeypatch):
     assert client._auth_method == AuthMethod.STATIC
     assert client._username == DEFAULT_MQTT_USERNAME
     assert client._password == DEFAULT_MQTT_PASSWORD
-    assert client.client_id == "HomeAssistant"
-    assert client._mqtt_client_id.startswith("HomeAssistant_")
+    assert client.client_id == DEFAULT_CLIENT_ID
+    assert client._mqtt_client_id.startswith(f"{DEFAULT_CLIENT_ID}_")
 
 
 def test_static_mqtt_client_id_is_unique_but_topic_id_is_stable():
@@ -223,7 +227,7 @@ def test_static_mqtt_client_id_is_unique_but_topic_id_is_stable():
                 **auth_mode_kwargs("static"))
 
     assert a._mqtt_client_id != b._mqtt_client_id
-    assert a.client_id == b.client_id == "HomeAssistant"
+    assert a.client_id == b.client_id == DEFAULT_CLIENT_ID
 
 
 def test_static_pairing_persists_the_topic_id_not_the_mqtt_id(tmp_path):
@@ -242,7 +246,7 @@ def test_static_pairing_persists_the_topic_id_not_the_mqtt_id(tmp_path):
     assert client.authenticate("1234", timeout=0.2) is True
 
     saved = storage.get_token(host="10.0.0.50", port=36669)
-    assert saved["client_id"] == "HomeAssistant"
+    assert saved["client_id"] == DEFAULT_CLIENT_ID
     assert saved["client_id"] != client._mqtt_client_id
 
 
@@ -439,7 +443,7 @@ def test_static_authenticate_succeeds_without_a_token(tmp_path):
     saved = storage.get_token(host="10.0.0.50", port=36669)
     assert saved is not None
     assert saved["auth_method"] == "static"
-    assert saved["client_id"] == "HomeAssistant"
+    assert saved["client_id"] == DEFAULT_CLIENT_ID
     assert saved["access_token"] is None
 
 
@@ -450,7 +454,7 @@ def test_saved_static_pairing_is_reused_with_the_fixed_login(tmp_path):
         device_id="10.0.0.50:36669",
         host="10.0.0.50",
         port=36669,
-        client_id="HomeAssistant",
+        client_id=DEFAULT_CLIENT_ID,
         mqtt_username=DEFAULT_MQTT_USERNAME,
         auth_method="static",
     )
@@ -464,10 +468,10 @@ def test_saved_static_pairing_is_reused_with_the_fixed_login(tmp_path):
 
     assert client._auth_method == AuthMethod.STATIC
     # The authorized identity is the topic client id, restored verbatim.
-    assert client.client_id == "HomeAssistant"
+    assert client.client_id == DEFAULT_CLIENT_ID
     # The MQTT client id is per-connection and must NOT be the saved one.
     assert client._mqtt_client_id != client.client_id
-    assert client._mqtt_client_id.startswith("HomeAssistant_")
+    assert client._mqtt_client_id.startswith(f"{DEFAULT_CLIENT_ID}_")
     assert client._username == DEFAULT_MQTT_USERNAME
     assert client._password == DEFAULT_MQTT_PASSWORD
     assert client._authenticated is True
@@ -480,7 +484,7 @@ def test_static_pairing_never_expires(tmp_path):
         device_id="10.0.0.50:36669",
         host="10.0.0.50",
         port=36669,
-        client_id="HomeAssistant",
+        client_id=DEFAULT_CLIENT_ID,
         mqtt_username=DEFAULT_MQTT_USERNAME,
         auth_method="static",
     )
@@ -557,7 +561,7 @@ def test_empty_authentication_push_signals_the_pin_is_showing():
     client.on_auth_required = lambda: seen.append(True)
 
     msg = MagicMock()
-    msg.topic = "/remoteapp/mobile/HomeAssistant/ui_service/data/authentication"
+    msg.topic = f"/remoteapp/mobile/{DEFAULT_CLIENT_ID}/ui_service/data/authentication"
     msg.payload = b""
 
     client._on_message(None, None, msg)
@@ -575,7 +579,7 @@ def test_start_pairing_can_wait_for_the_tv_to_confirm():
     def fake_publish(topic, payload=""):
         # Simulate the TV pushing the "PIN is up" notification.
         msg = MagicMock()
-        msg.topic = "/remoteapp/mobile/HomeAssistant/ui_service/data/authentication"
+        msg.topic = f"/remoteapp/mobile/{DEFAULT_CLIENT_ID}/ui_service/data/authentication"
         msg.payload = b""
         client._on_message(None, None, msg)
         return True
@@ -606,7 +610,7 @@ def test_legacy_pairing_is_triggered_with_gettvstate():
 
     client.start_pairing()
     assert published == [
-        "/remoteapp/tv/ui_service/HomeAssistant/actions/gettvstate"
+        f"/remoteapp/tv/ui_service/{DEFAULT_CLIENT_ID}/actions/gettvstate"
     ]
 
 
@@ -682,7 +686,7 @@ def test_connect_falls_back_after_a_detected_protocol_is_rejected():
     assert client._auth_method == AuthMethod.STATIC
     assert client._username == DEFAULT_MQTT_USERNAME
     assert client._password == DEFAULT_MQTT_PASSWORD
-    assert client.client_id == "HomeAssistant"
+    assert client.client_id == DEFAULT_CLIENT_ID
 
 
 def test_connect_does_not_fall_back_when_the_tv_is_unreachable():

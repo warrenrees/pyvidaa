@@ -275,8 +275,11 @@ class TokenStorage:
         if self._is_tokenless(token_data):
             # A static-auth pairing never expires or needs refreshing; only the
             # TV forgetting the client_id invalidates it, which we cannot see.
+            # `tokenless` tells callers not to treat the zero expiry as "due for
+            # renewal" - there is no token to renew.
             return {
                 "has_token": True,
+                "tokenless": True,
                 "access_valid": True,
                 "refresh_valid": False,
                 "access_expires_in": 0,
