@@ -2,7 +2,12 @@
 
 from typing import Any, Dict, List, Optional
 
-from .constants import DEFAULT_PORT, DEFAULT_BRAND, DEFAULT_CLIENT_ID
+from .constants import (
+    AUTH_MODE_AUTO,
+    DEFAULT_PORT,
+    DEFAULT_BRAND,
+    DEFAULT_CLIENT_ID,
+)
 
 
 # Default configuration for a single TV
@@ -12,6 +17,7 @@ DEFAULT_TV_CONFIG: Dict[str, Any] = {
     "alias": None,               # Friendly name for CLI (--tv alias)
     "name": None,                # Display name (auto-populated from TV)
     "brand": DEFAULT_BRAND,      # "his"
+    "auth_mode": AUTH_MODE_AUTO,  # auto | dynamic | static
     # Auto-populated during pairing:
     # "model": None,
     # "sw_version": None,

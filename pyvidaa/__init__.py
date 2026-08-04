@@ -82,6 +82,7 @@ from .topics import (
 )
 from .protocol import (
     AuthMethod,
+    auth_mode_kwargs,
     detect_protocol,
     get_auth_method,
     get_auth_method_order,
@@ -127,6 +128,10 @@ from .config import (
     DEFAULT_BRAND,
     PROTOCOL_MODERN_THRESHOLD,
     PROTOCOL_MIDDLE_THRESHOLD,
+    AUTH_MODE_AUTO,
+    AUTH_MODE_DYNAMIC,
+    AUTH_MODE_STATIC,
+    AUTH_MODES,
 )
 from .discovery import (
     DiscoveredTV,
@@ -146,7 +151,7 @@ from .async_client import (
     async_detect_protocol,
 )
 
-__version__ = "2.1.0"
+__version__ = "2.2.0"
 __all__ = [
     "VidaaTV",
     # Power
@@ -227,11 +232,16 @@ __all__ = [
     "get_storage",
     # Protocol detection
     "AuthMethod",
+    "auth_mode_kwargs",
     "detect_protocol",
     "get_auth_method",
     "get_auth_method_order",
     "PROTOCOL_MODERN_THRESHOLD",
     "PROTOCOL_MIDDLE_THRESHOLD",
+    "AUTH_MODE_AUTO",
+    "AUTH_MODE_DYNAMIC",
+    "AUTH_MODE_STATIC",
+    "AUTH_MODES",
     # Config
     "load_config",
     "save_config",

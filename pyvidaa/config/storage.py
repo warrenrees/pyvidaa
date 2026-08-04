@@ -100,6 +100,12 @@ class TokenStorage:
         if token_data is None:
             return None
 
+        # Static-auth pairings carry no token to expire: the TV authorizes the
+        # client_id itself, and the record only exists to reuse it.
+        if self._is_tokenless(token_data):
+            token_data["needs_refresh"] = False
+            return token_data
+
         # Check if access token expired
         if self._is_expired(token_data.get("access_token_expires_at")):
             # Check if refresh token is still valid
@@ -163,8 +169,12 @@ class TokenStorage:
             "device_id": device_id,
             "access_token": access_token,
             "refresh_token": refresh_token,
-            "access_token_time": now,
-            "access_token_expires_at": now + (access_token_duration_days * 24 * 60 * 60),
+            "access_token_time": now if access_token else None,
+            "access_token_expires_at": (
+                now + (access_token_duration_days * 24 * 60 * 60)
+                if access_token
+                else None
+            ),
             "refresh_token_time": now if refresh_token else None,
             "refresh_token_expires_at": now + (refresh_token_duration_days * 24 * 60 * 60) if refresh_token else None,
             "client_id": client_id,
@@ -215,6 +225,11 @@ class TokenStorage:
             del data[key]
             self._save_all(data)
 
+    @staticmethod
+    def _is_tokenless(token_data: Dict[str, Any]) -> bool:
+        """Whether this record is a static-auth pairing (no token involved)."""
+        return token_data.get("auth_method") == "static"
+
     def _is_expired(self, expires_at: Optional[float], buffer_seconds: int = 300) -> bool:
         """Check if a timestamp has expired (with buffer).
 
@@ -255,6 +270,19 @@ class TokenStorage:
                 "refresh_expires_in": 0,
                 "needs_refresh": False,
                 "needs_reauth": True,
+            }
+
+        if self._is_tokenless(token_data):
+            # A static-auth pairing never expires or needs refreshing; only the
+            # TV forgetting the client_id invalidates it, which we cannot see.
+            return {
+                "has_token": True,
+                "access_valid": True,
+                "refresh_valid": False,
+                "access_expires_in": 0,
+                "refresh_expires_in": 0,
+                "needs_refresh": False,
+                "needs_reauth": False,
             }
 
         now = time.time()

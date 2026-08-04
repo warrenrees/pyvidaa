@@ -12,6 +12,7 @@ from typing import Optional
 from .certs import MISSING_CERT_HELP, resolve_client_certs
 from .client import VidaaTV
 from .discovery import discover_all, discover_ssdp, discover_udp, probe_ip
+from .protocol import auth_mode_kwargs
 from .config import (
     load_config,
     get_tv_config,
@@ -22,6 +23,8 @@ from .config import (
     add_tv,
     set_default_tv,
     get_storage,
+    AUTH_MODES,
+    AUTH_MODE_AUTO,
     DEFAULT_PORT,
 )
 from .keys import KEY_NAME_MAP, ALL_KEYS
@@ -84,26 +87,40 @@ def _resolve_brand_for_ip(ip: str) -> str:
     return "his"
 
 
-def create_tv_client(tv_id: Optional[str] = None, ip: Optional[str] = None) -> VidaaTV:
+def _resolve_auth_mode_for_ip(ip: str) -> str:
+    """Look up a stored auth mode for a TV addressed by raw IP."""
+    for cfg in list_tvs():
+        if cfg.get("host") == ip and cfg.get("auth_mode"):
+            return cfg["auth_mode"]
+    return AUTH_MODE_AUTO
+
+
+def create_tv_client(
+    tv_id: Optional[str] = None,
+    ip: Optional[str] = None,
+    auth_mode: Optional[str] = None,
+) -> VidaaTV:
     """Create TV client with config settings.
 
     Args:
         tv_id: TV identifier (device_id or alias). Uses default TV if not provided.
         ip: Override IP address (takes precedence over tv_id)
+        auth_mode: auto/dynamic/static. Falls back to the TV's stored setting,
+            then "auto".
 
     Returns:
         Configured VidaaTV client
     """
     if ip:
         # Direct IP override - still resolve the MAC so dynamic auth can build a
-        # valid client_id (otherwise we silently fall back to static creds -> rc=5).
+        # valid client_id (otherwise it falls back to static credentials).
         mac_address = _resolve_mac_for_ip(ip)
         return VidaaTV(
             host=ip,
             port=DEFAULT_PORT,
             mac_address=mac_address,
-            use_dynamic_auth=True,
             brand=_resolve_brand_for_ip(ip),
+            **auth_mode_kwargs(auth_mode or _resolve_auth_mode_for_ip(ip)),
         )
 
     # Get TV config by ID or use default
@@ -133,14 +150,16 @@ def create_tv_client(tv_id: Optional[str] = None, ip: Optional[str] = None) -> V
         host=host,
         port=port,
         mac_address=mac_address,
-        use_dynamic_auth=True,
         brand=brand,
+        **auth_mode_kwargs(
+            auth_mode or tv_config.get("auth_mode") or AUTH_MODE_AUTO
+        ),
     )
 
 
 def cmd_power(args):
     """Toggle TV power."""
-    tv = create_tv_client(getattr(args, 'tv', None), args.ip)
+    tv = create_tv_client(getattr(args, 'tv', None), args.ip, getattr(args, 'auth_mode', None))
     if tv.connect(timeout=5):
         tv.power()
         time.sleep(0.5)
@@ -154,7 +173,7 @@ def cmd_power(args):
 
 def cmd_volume(args):
     """Control volume."""
-    tv = create_tv_client(getattr(args, 'tv', None), args.ip)
+    tv = create_tv_client(getattr(args, 'tv', None), args.ip, getattr(args, 'auth_mode', None))
     if tv.connect(timeout=5):
         if args.action == "up":
             for _ in range(args.amount):
@@ -201,7 +220,7 @@ def cmd_key(args):
             print(f"Unknown key '{args.key}'. Use 'tv keys' to list available keys.", file=sys.stderr)
         return 1
 
-    tv = create_tv_client(getattr(args, 'tv', None), args.ip)
+    tv = create_tv_client(getattr(args, 'tv', None), args.ip, getattr(args, 'auth_mode', None))
     if tv.connect(timeout=5):
         tv.send_key(key)
         time.sleep(0.3)
@@ -250,7 +269,7 @@ def cmd_keys(args):
 
 def cmd_nav(args):
     """Navigation shortcuts."""
-    tv = create_tv_client(getattr(args, 'tv', None), args.ip)
+    tv = create_tv_client(getattr(args, 'tv', None), args.ip, getattr(args, 'auth_mode', None))
     if tv.connect(timeout=5):
         action = args.action
         if action == "up":
@@ -280,7 +299,7 @@ def cmd_nav(args):
 
 def cmd_app(args):
     """Launch an app."""
-    tv = create_tv_client(getattr(args, 'tv', None), args.ip)
+    tv = create_tv_client(getattr(args, 'tv', None), args.ip, getattr(args, 'auth_mode', None))
     if tv.connect(timeout=5):
         if args.name == "list":
             apps = tv.get_apps()
@@ -306,7 +325,7 @@ def cmd_app(args):
 
 def cmd_source(args):
     """Change input source."""
-    tv = create_tv_client(getattr(args, 'tv', None), args.ip)
+    tv = create_tv_client(getattr(args, 'tv', None), args.ip, getattr(args, 'auth_mode', None))
     if tv.connect(timeout=5):
         if args.source == "list":
             sources = tv.get_sources()
@@ -396,6 +415,12 @@ def cmd_config(args):
             if device.protocol_version:
                 extra["protocol_version"] = device.protocol_version
 
+        # An explicit --auth-mode is worth persisting: it is the escape hatch
+        # for TVs whose reported protocol version does not match what they
+        # actually accept.
+        if getattr(args, "auth_mode", None):
+            extra["auth_mode"] = args.auth_mode
+
         add_tv(ip, ip, alias=alias, **extra)  # Use IP as device_id until paired
         print(f"Added TV at {ip}")
         if device and device.name:
@@ -404,6 +429,8 @@ def cmd_config(args):
             print(f"  MAC:   {extra['mac']}")
         else:
             print("  MAC:   (not found - TV may be off; re-run when it is on)")
+        if extra.get("auth_mode"):
+            print(f"  Auth:  {extra['auth_mode']}")
         if alias:
             print(f"  Alias: {alias}")
 
@@ -440,7 +467,7 @@ def cmd_config(args):
 def cmd_status(args):
     """Get TV status."""
     tv_id = getattr(args, 'tv', None)
-    tv = create_tv_client(tv_id, args.ip)
+    tv = create_tv_client(tv_id, args.ip, getattr(args, 'auth_mode', None))
     tv_config = get_tv_config(tv_id) if tv_id else get_default_tv()
     host = args.ip or (tv_config.get("host") if tv_config else "unknown")
     print(f"Connecting to {host}...")
@@ -574,7 +601,7 @@ def cmd_on(args):
             time.sleep(5)
 
     # Try to connect and use smart power on
-    tv = create_tv_client(tv_id, args.ip)
+    tv = create_tv_client(tv_id, args.ip, getattr(args, 'auth_mode', None))
     for attempt in range(6):
         if tv.connect(timeout=3):
             # Use smart power_on which checks state first
@@ -592,7 +619,7 @@ def cmd_on(args):
 
 def cmd_off(args):
     """Turn TV off (smart power off with state check)."""
-    tv = create_tv_client(getattr(args, 'tv', None), args.ip)
+    tv = create_tv_client(getattr(args, 'tv', None), args.ip, getattr(args, 'auth_mode', None))
     if tv.connect(timeout=5):
         if tv.power_off():
             print("Power off command sent.")
@@ -763,7 +790,7 @@ def cmd_auth(args):
 
     elif args.action == "pair":
         print(f"Starting pairing with {host}:{port} ...")
-        tv = create_tv_client(tv_id, args.ip)
+        tv = create_tv_client(tv_id, args.ip, getattr(args, 'auth_mode', None))
 
         if tv.connect(timeout=10):
             # Trigger PIN dialog
@@ -803,7 +830,7 @@ def cmd_auth(args):
         print("Stored credentials cleared.")
 
     elif args.action == "refresh":
-        tv = create_tv_client(tv_id, args.ip)
+        tv = create_tv_client(tv_id, args.ip, getattr(args, 'auth_mode', None))
         if tv.connect(timeout=10):
             if tv.refresh_token():
                 print("Token refreshed successfully!")
@@ -861,6 +888,15 @@ def main():
     )
     parser.add_argument("--tv", help="TV ID or alias (uses default TV if not specified)")
     parser.add_argument("--ip", help="TV IP address (overrides --tv and config)")
+    parser.add_argument(
+        "--auth-mode",
+        choices=list(AUTH_MODES),
+        help=(
+            "Credential scheme: auto (default, detect and fall back), "
+            "dynamic (force the timestamp-hash algorithm), or static (force "
+            "the fixed login older firmware needs)"
+        ),
+    )
 
     subparsers = parser.add_subparsers(dest="command", help="Commands")
 

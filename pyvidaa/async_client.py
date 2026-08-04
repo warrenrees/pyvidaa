@@ -74,6 +74,7 @@ class AsyncVidaaTV:
         brand: str = "his",
         auth_method: Optional[AuthMethod] = None,
         auto_detect_protocol: bool = True,
+        allow_static_auth: bool = True,
         executor: Optional[ThreadPoolExecutor] = None,
         loop: Optional[asyncio.AbstractEventLoop] = None,
     ):
@@ -96,8 +97,9 @@ class AsyncVidaaTV:
             mac_address: Device MAC address for dynamic auth
             use_dynamic_auth: Use dynamic credential generation
             brand: TV brand identifier
-            auth_method: Authentication method (LEGACY, MIDDLE, MODERN)
+            auth_method: Authentication method (STATIC, LEGACY, MIDDLE, MODERN)
             auto_detect_protocol: Auto-detect protocol version
+            allow_static_auth: Whether STATIC may be selected automatically
             executor: Custom ThreadPoolExecutor (uses default if None)
             loop: Event loop (uses current if None)
         """
@@ -125,6 +127,7 @@ class AsyncVidaaTV:
             "brand": brand,
             "auth_method": auth_method,
             "auto_detect_protocol": auto_detect_protocol,
+            "allow_static_auth": allow_static_auth,
         }
 
         # Client is created lazily in _ensure_client() to avoid blocking event loop
@@ -197,6 +200,16 @@ class AsyncVidaaTV:
     def is_connected(self) -> bool:
         """Check if connected to TV."""
         return self._client.is_connected if self._client else False
+
+    @property
+    def auth_method(self) -> Optional[AuthMethod]:
+        """The auth method in use - after connecting, the one that worked."""
+        return self._client.auth_method if self._client else None
+
+    @property
+    def auth_mode(self) -> Optional[str]:
+        """The auth method in use, as a user-facing mode string."""
+        return self._client.auth_mode if self._client else None
 
     @property
     def is_authenticated(self) -> bool:

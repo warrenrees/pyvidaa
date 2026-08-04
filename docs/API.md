@@ -389,7 +389,7 @@ version = detect_protocol("10.0.0.125")
 print(f"Protocol version: {version}")  # e.g., 3290
 
 auth = get_auth_method(version)
-print(f"Auth method: {auth.value}")  # modern, middle, or legacy
+print(f"Auth method: {auth.value}")  # static, legacy, middle, or modern
 ```
 
 ### `AuthMethod`
@@ -399,10 +399,33 @@ Enum for authentication methods.
 ```python
 from pyvidaa import AuthMethod
 
-AuthMethod.LEGACY   # Protocol < 3000
+AuthMethod.STATIC   # Protocol < 3000 - fixed hisenseservice login, no token
+AuthMethod.LEGACY   # Protocol < 3000 - dynamic, no XOR username
 AuthMethod.MIDDLE   # Protocol 3000-3285
 AuthMethod.MODERN   # Protocol >= 3290
 ```
+
+`get_auth_method()` returns the *preferred* method for a version;
+`get_auth_method_order(version)` returns every method ordered by likelihood,
+which is the sequence the client falls back through when the TV rejects the
+credentials.
+
+### `auth_mode_kwargs(auth_mode)`
+
+Translate a user-facing auth mode into constructor kwargs.
+
+```python
+from pyvidaa import VidaaTV, auth_mode_kwargs
+
+# "auto" (default) detects the protocol and falls back if the TV rejects it.
+# "static" forces the fixed login that pre-dynamic firmware needs.
+# "dynamic" forces the timestamp-hash algorithm.
+tv = VidaaTV("10.0.0.125", **auth_mode_kwargs("static"))
+```
+
+Pre-dynamic firmware issues no access token - it authorizes the client_id once
+the PIN is accepted - so `authenticate()` returns True without one, and the
+pairing is persisted so later connects reuse the same client_id.
 
 ---
 

@@ -16,6 +16,8 @@ import paho.mqtt.client as mqtt
 _LOGGER = logging.getLogger(__name__)
 
 from .config import (
+    AUTH_MODE_DYNAMIC,
+    AUTH_MODE_STATIC,
     DEFAULT_PORT,
     DEFAULT_MQTT_USERNAME,
     DEFAULT_MQTT_PASSWORD,
@@ -24,7 +26,7 @@ from .config import (
     get_storage,
 )
 from .certs import MISSING_CERT_HELP, bundled_ca_path, resolve_client_certs
-from .credentials import generate_credentials, generate_credentials_static
+from .credentials import generate_credentials
 from .keys import ALL_KEYS
 from .protocol import AuthMethod, detect_protocol, get_auth_method, get_auth_method_order
 from .topics import (
@@ -83,6 +85,7 @@ class VidaaTV:
         brand: str = "his",
         auth_method: Optional[AuthMethod] = None,
         auto_detect_protocol: bool = True,
+        allow_static_auth: bool = True,
     ):
         """Initialize the Hisense TV client.
 
@@ -110,10 +113,17 @@ class VidaaTV:
                         If None and auto_detect_protocol is True, will auto-detect.
             auto_detect_protocol: Automatically detect protocol version from TV.
                                  Only used when auth_method is None.
+            allow_static_auth: Whether STATIC (the fixed pre-dynamic firmware
+                              login) may be selected by detection or fallback.
+                              Set False to force the dynamic algorithm.
         """
         self.host = host
         self.port = port
         self.client_id = client_id
+        # The client_id as supplied, before any auth method overwrote
+        # self.client_id with a generated one. STATIC auth uses it verbatim for
+        # both the MQTT client id and the topic client id.
+        self._base_client_id = client_id
         self.use_ssl = use_ssl
         self.verify_ssl = verify_ssl
         self.enable_persistence = enable_persistence
@@ -122,16 +132,25 @@ class VidaaTV:
         self.mac_address = mac_address
         self.use_dynamic_auth = use_dynamic_auth
         self.brand = brand
+        # True once credentials came from storage: a failure then means the TV
+        # dropped the pairing, so retrying other auth methods is pointless (and
+        # would discard the client_id the TV authorized).
+        self._using_saved_creds = False
+        self._warned_missing_certs = False
 
         # Protocol detection and auth method
         self._auth_method = auth_method
         self._protocol_version: Optional[int] = None
         self._auto_detect_protocol = auto_detect_protocol
+        self._allow_static_auth = allow_static_auth
 
         # Auto-detect protocol if needed and dynamic auth is enabled
         if use_dynamic_auth and auth_method is None and auto_detect_protocol:
             self._protocol_version = detect_protocol(host)
             self._auth_method = get_auth_method(self._protocol_version)
+            if self._auth_method == AuthMethod.STATIC and not allow_static_auth:
+                # Dynamic auth was forced; use the oldest dynamic method.
+                self._auth_method = AuthMethod.LEGACY
             if self._protocol_version is not None:
                 _LOGGER.info("Detected protocol version: %s -> %s", self._protocol_version, self._auth_method.value)
             else:
@@ -144,6 +163,11 @@ class VidaaTV:
         self._auth_required = False
 
         self._connected = False
+        # Last CONNACK return code seen. Only an authorization rejection (4/5)
+        # means the credentials were wrong; a TCP/TLS failure or timeout means
+        # the TV is off or unreachable, and retrying other auth methods there
+        # would just multiply the connect timeout.
+        self._last_connack_rc: Optional[int] = None
         self._response_event = threading.Event()
         self._auth_event = threading.Event()
         # Set once the access token has actually been received and saved, so
@@ -158,10 +182,33 @@ class VidaaTV:
         self._pending_token_refresh = False
         self._refresh_token: Optional[str] = None
 
+        # Resolve the client certificate/key pair once, so the initial connect
+        # and any later reconnect use the same source (explicit args, env var,
+        # ~/.config/pyvidaa/certs, or a repo-local ./certs).
+        self._certs = resolve_client_certs(certfile, keyfile)
+
         # Check for saved credentials first (after successful pairing)
         saved_creds = self._load_saved_credentials()
         if saved_creds:
-            if saved_creds.get("needs_reauth"):
+            if saved_creds.get("auth_method") == AuthMethod.STATIC.value:
+                # Pre-dynamic firmware issues no token: the TV authorizes the
+                # client_id itself once the PIN is accepted. Rebuild the fixed
+                # login rather than reading a password back off disk.
+                self._auth_method = AuthMethod.STATIC
+                self._mqtt_client_id = saved_creds["client_id"]
+                self.client_id = saved_creds["client_id"]
+                self._username = DEFAULT_MQTT_USERNAME
+                self._password = DEFAULT_MQTT_PASSWORD
+                self._authenticated = True
+                self._using_saved_creds = True
+                if saved_creds.get("protocol_version"):
+                    self._protocol_version = saved_creds["protocol_version"]
+                _LOGGER.debug(
+                    "Using saved static-auth pairing: client_id=%s",
+                    self._mqtt_client_id,
+                )
+
+            elif saved_creds.get("needs_reauth"):
                 # Both tokens expired - need fresh pairing
                 _LOGGER.info("Stored tokens expired. Need to re-authenticate.")
                 if use_dynamic_auth and mac_address:
@@ -180,6 +227,7 @@ class VidaaTV:
                 self._refresh_token = saved_creds["refresh_token"]
                 self._pending_token_refresh = True
                 self.client_id = saved_creds["client_id"]
+                self._using_saved_creds = True
                 # Restore auth method from saved credentials
                 if saved_creds.get("auth_method"):
                     self._auth_method = AuthMethod(saved_creds["auth_method"])
@@ -197,6 +245,7 @@ class VidaaTV:
                 self._refresh_token = saved_creds.get("refresh_token")
                 self._authenticated = True
                 self.client_id = saved_creds["client_id"]
+                self._using_saved_creds = True
                 # Restore auth method from saved credentials
                 if saved_creds.get("auth_method"):
                     self._auth_method = AuthMethod(saved_creds["auth_method"])
@@ -206,35 +255,39 @@ class VidaaTV:
                 _LOGGER.debug("Using saved credentials (valid for %dh): client_id=%s...", hours_left, self._mqtt_client_id[:30])
 
         if not saved_creds:
-            # No saved credentials - need to generate or use static
-            if use_dynamic_auth and mac_address:
-                # Generate fresh credentials for new pairing
-                creds = generate_credentials(
-                    mac_address=mac_address,
-                    brand=brand,
-                    auth_method=self._auth_method,
+            method = self._auth_method
+            if method is None:
+                method = AuthMethod.MODERN if use_dynamic_auth else AuthMethod.STATIC
+            if method != AuthMethod.STATIC and not mac_address:
+                _LOGGER.warning(
+                    "%s auth needs a MAC address to build a client_id, and none "
+                    "is available; falling back to static credentials. Provide "
+                    "the TV's MAC to use dynamic auth.", method.value
                 )
-                self._mqtt_client_id = creds.client_id
-                self._username = creds.username
-                self._password = creds.password
-                # Use MQTT client_id for topics during pairing as well
-                self.client_id = creds.client_id
-                auth_label = self._auth_method.value if self._auth_method else "auto"
-                _LOGGER.debug("Using dynamic auth (%s): client_id=%s...", auth_label, creds.client_id[:30])
-            else:
-                if use_dynamic_auth and not mac_address:
-                    _LOGGER.warning(
-                        "Dynamic auth requested but no MAC address available; "
-                        "falling back to static credentials. The TV will likely "
-                        "reject this (MQTT code 5). Provide the TV's MAC so a valid "
-                        "client_id can be generated."
-                    )
-                # Use static credentials
-                self._mqtt_client_id = f"hisense_{client_id}_{int(time.time())}"
+                method = AuthMethod.STATIC
+
+            if method == AuthMethod.STATIC:
+                # Fixed credentials (the pre-dynamic firmware path). The
+                # client_id must stay stable across runs: the TV authorizes the
+                # id itself rather than issuing a token. Honour any
+                # username/password the caller supplied.
+                self._auth_method = AuthMethod.STATIC
+                self._mqtt_client_id = self._base_client_id
+                self.client_id = self._base_client_id
                 self._username = username
                 self._password = password
+                self._build_mqtt_client()
+            else:
+                self._apply_auth_method(method)
+        else:
+            self._build_mqtt_client()
 
-        # Create MQTT client with explicit configuration
+    def _build_mqtt_client(self) -> None:
+        """Create the paho client for the current credentials and configure TLS.
+
+        Called for the initial connection and again for each auth-method
+        fallback attempt, so the two paths can never drift apart.
+        """
         self._client = mqtt.Client(
             client_id=self._mqtt_client_id,
             clean_session=True,
@@ -244,42 +297,55 @@ class VidaaTV:
         self._client.on_connect = self._on_connect
         self._client.on_disconnect = self._on_disconnect
         self._client.on_message = self._on_message
+        self._client.username_pw_set(self._username, self._password)
 
-        # Resolve the client certificate/key pair once, so the initial connect
-        # and any later reconnect use the same source (explicit args, env var,
-        # ~/.config/pyvidaa/certs, or a repo-local ./certs).
-        self._certs = resolve_client_certs(certfile, keyfile)
+        if not self.use_ssl:
+            return
 
-        # Configure SSL with client certificate for mutual TLS
-        if use_ssl:
-            if self._certs:
-                cert, key = self._certs
-                # Using client certs - also need username/password
-                self._client.username_pw_set(self._username, self._password)
-                ca_certs, cert_reqs = self._server_verify_args()
-                self._client.tls_set(
-                    ca_certs=ca_certs,
-                    certfile=cert,
-                    keyfile=key,
-                    cert_reqs=cert_reqs,
-                    tls_version=ssl.PROTOCOL_TLS,
-                )
-                # Always skip hostname checking: the TV's cert CN is "RemoteCA",
-                # not its IP. When verifying, the chain is still validated.
-                self._client.tls_insecure_set(True)
-            else:
-                # No client cert found. Mutual TLS is required by some protocol
-                # versions, so warn (with guidance) and fall back to plain TLS.
-                _LOGGER.warning("%s", MISSING_CERT_HELP)
-                self._client.username_pw_set(self._username, self._password)
-                context = ssl.create_default_context()
-                if not verify_ssl:
-                    context.check_hostname = False
-                    context.verify_mode = ssl.CERT_NONE
-                self._client.tls_set_context(context)
+        if self._certs:
+            cert, key = self._certs
+            ca_certs, cert_reqs = self._server_verify_args()
+            self._client.tls_set(
+                ca_certs=ca_certs,
+                certfile=cert,
+                keyfile=key,
+                cert_reqs=cert_reqs,
+                tls_version=ssl.PROTOCOL_TLS,
+            )
+            # Always skip hostname checking: the TV's cert CN is "RemoteCA",
+            # not its IP. When verifying, the chain is still validated.
+            self._client.tls_insecure_set(True)
         else:
-            # No SSL - use username/password
-            self._client.username_pw_set(self._username, self._password)
+            # No client cert found. Mutual TLS is required by some protocol
+            # versions, so warn (with guidance) and fall back to plain TLS.
+            # Warn once, not once per fallback attempt.
+            if not self._warned_missing_certs:
+                _LOGGER.warning("%s", MISSING_CERT_HELP)
+                self._warned_missing_certs = True
+            context = ssl.create_default_context()
+            if not self.verify_ssl:
+                context.check_hostname = False
+                context.verify_mode = ssl.CERT_NONE
+            self._client.tls_set_context(context)
+
+    def _apply_auth_method(self, method: AuthMethod) -> None:
+        """Generate credentials for `method` and rebuild the paho client."""
+        creds = generate_credentials(
+            mac_address=self.mac_address,
+            brand=self.brand,
+            auth_method=method,
+            client_id=self._base_client_id,
+        )
+        self._auth_method = method
+        self._mqtt_client_id = creds.client_id
+        self._username = creds.username
+        self._password = creds.password
+        # The MQTT client_id doubles as the topic client_id.
+        self.client_id = creds.client_id
+        _LOGGER.debug(
+            "Using %s auth: client_id=%s", method.value, creds.client_id[:30]
+        )
+        self._build_mqtt_client()
 
     def _server_verify_args(self):
         """Return (ca_certs, cert_reqs) for the mutual-TLS handshake.
@@ -362,8 +428,8 @@ class VidaaTV:
             timeout: Connection timeout in seconds
             auto_auth: Automatically use saved auth token if available
             auto_refresh: Automatically refresh expired access token
-            try_fallback: If connection fails and protocol was not detected,
-                         try other auth methods sequentially
+            try_fallback: If the TV rejects the credentials, try the remaining
+                         auth methods sequentially
 
         Returns:
             True if connected successfully
@@ -376,6 +442,7 @@ class VidaaTV:
             except Exception:
                 pass
             self._connected = False
+            self._last_connack_rc = None
 
             self._client.connect(self.host, self.port, keepalive=60)
             self._client.loop_start()
@@ -388,7 +455,7 @@ class VidaaTV:
             if not self._connected:
                 # Connection failed - stop loop and try fallback if enabled
                 self._client.loop_stop()
-                if try_fallback and self._protocol_version is None and self.use_dynamic_auth and self.mac_address:
+                if try_fallback and self._should_try_fallback():
                     return self._connect_with_fallback(timeout=timeout, auto_refresh=auto_refresh)
                 return False
 
@@ -407,14 +474,34 @@ class VidaaTV:
             except Exception:
                 pass
             # Try fallback on exception too
-            if try_fallback and self._protocol_version is None and self.use_dynamic_auth and self.mac_address:
+            if try_fallback and self._should_try_fallback():
                 return self._connect_with_fallback(timeout=timeout, auto_refresh=auto_refresh)
             return False
+
+    def _should_try_fallback(self) -> bool:
+        """Whether a failed connect is worth retrying with other auth methods.
+
+        Only an authorization rejection means the credentials were wrong. A
+        refused/timed-out connection means the TV is off or unreachable, and
+        walking the whole method chain there would just multiply the connect
+        timeout on every poll.
+        """
+        if self._last_connack_rc not in (4, 5):
+            return False
+
+        # Credentials that came from storage were accepted by the TV once. A
+        # rejection now means the pairing was dropped (or the token expired
+        # server-side), which re-pairing fixes and a different algorithm does
+        # not - and switching would discard the client_id the TV authorized.
+        if self._using_saved_creds:
+            return False
+
+        return True
 
     def _connect_with_fallback(self, timeout: float = 10.0, auto_refresh: bool = True) -> bool:
         """Try connecting with different auth methods until one works.
 
-        Called when initial connection fails and protocol was not auto-detected.
+        Called when the TV rejected the credentials from the first attempt.
 
         Args:
             timeout: Connection timeout in seconds per attempt
@@ -423,61 +510,23 @@ class VidaaTV:
         Returns:
             True if connected successfully with any auth method
         """
-        auth_methods = get_auth_method_order()
+        auth_methods = [
+            m
+            for m in get_auth_method_order(self._protocol_version)
+            if m != self._auth_method
+        ]
 
-        # Skip the method we already tried
-        if self._auth_method in auth_methods:
-            auth_methods = [m for m in auth_methods if m != self._auth_method]
+        if not self._allow_static_auth:
+            auth_methods = [m for m in auth_methods if m != AuthMethod.STATIC]
+
+        # Every method except STATIC derives its client_id from the MAC.
+        if not self.mac_address:
+            auth_methods = [m for m in auth_methods if m == AuthMethod.STATIC]
 
         for method in auth_methods:
             _LOGGER.info("Trying %s authentication...", method.value)
-            self._auth_method = method
-
-            # Regenerate credentials with new auth method
-            creds = generate_credentials(
-                mac_address=self.mac_address,
-                brand=self.brand,
-                auth_method=method,
-            )
-
-            # Create new MQTT client with new credentials
-            self._mqtt_client_id = creds.client_id
-            self._username = creds.username
-            self._password = creds.password
-            self.client_id = creds.client_id
-
-            self._client = mqtt.Client(
-                client_id=self._mqtt_client_id,
-                clean_session=True,
-                protocol=mqtt.MQTTv311,
-                transport="tcp"
-            )
-            self._client.on_connect = self._on_connect
-            self._client.on_disconnect = self._on_disconnect
-            self._client.on_message = self._on_message
-
-            # Reconfigure SSL (reuse the cert pair resolved at init)
-            if self.use_ssl:
-                if self._certs:
-                    cert, key = self._certs
-                    self._client.username_pw_set(self._username, self._password)
-                    ca_certs, cert_reqs = self._server_verify_args()
-                    self._client.tls_set(
-                        ca_certs=ca_certs,
-                        certfile=cert,
-                        keyfile=key,
-                        cert_reqs=cert_reqs,
-                        tls_version=ssl.PROTOCOL_TLS,
-                    )
-                    self._client.tls_insecure_set(True)
-                else:
-                    self._client.username_pw_set(self._username, self._password)
-                    context = ssl.create_default_context()
-                    context.check_hostname = False
-                    context.verify_mode = ssl.CERT_NONE
-                    self._client.tls_set_context(context)
-            else:
-                self._client.username_pw_set(self._username, self._password)
+            self._apply_auth_method(method)
+            self._last_connack_rc = None
 
             # Try connecting
             try:
@@ -516,6 +565,7 @@ class VidaaTV:
 
     def _on_connect(self, client, userdata, flags, rc):
         """Handle connection callback."""
+        self._last_connack_rc = rc
         if rc == 0:
             self._connected = True
             _LOGGER.info("Connected to TV at %s:%s", self.host, self.port)
@@ -548,13 +598,23 @@ class VidaaTV:
                 2: "client_id rejected",
                 3: "server unavailable",
                 4: "bad username or password",
-                5: "not authorized - check the TV clock (date/time, timezone, DST); "
-                   "time-based credentials are rejected when clocks disagree, and "
-                   "stale saved tokens can also cause this (try 'tv auth clear')",
+                5: "not authorized - older firmware needs static credentials "
+                   "(try auth mode 'static'); otherwise check the TV clock "
+                   "(date/time, timezone, DST), since time-based credentials "
+                   "are rejected when clocks disagree, and stale saved tokens "
+                   "can also cause this (try 'tv auth clear')",
             }
             detail = reasons.get(rc, "unknown error")
             _LOGGER.error("Connection to %s:%s failed with code %s (%s)",
                           self.host, self.port, rc, detail)
+            # The TV rejected us; paho would otherwise keep reconnecting with
+            # the same (already-rejected, and for dynamic auth already-stale)
+            # credentials, logging the same error every couple of seconds.
+            # Safe from this callback: loop_stop() skips joining its own thread.
+            try:
+                self._client.loop_stop()
+            except Exception:  # pragma: no cover - defensive
+                pass
 
     def _on_disconnect(self, client, userdata, rc):
         """Handle disconnection callback."""
@@ -682,6 +742,30 @@ class VidaaTV:
             self._auth_event.set()
             self._token_event.set()
 
+    def _save_static_pairing(self) -> None:
+        """Persist a tokenless (pre-dynamic firmware) pairing.
+
+        These TVs issue no token - they authorize the client_id itself - so the
+        record exists purely to reuse the same client_id and username on the
+        next connect. The password is never written: it is the fixed constant.
+        """
+        if not self._storage:
+            return
+
+        self._storage.save_token(
+            device_id=f"{self.host}:{self.port}",
+            host=self.host,
+            port=self.port,
+            access_token=None,
+            refresh_token=None,
+            client_id=self._mqtt_client_id,
+            mqtt_username=self._username,
+            uuid=self.mac_address,
+            auth_method=AuthMethod.STATIC.value,
+            protocol_version=self._protocol_version,
+        )
+        _LOGGER.info("Pairing saved (static auth, no token issued by this TV)")
+
     def _publish(self, topic: str, payload: Any = "") -> bool:
         """Publish a message to the TV.
 
@@ -766,8 +850,28 @@ class VidaaTV:
         if self._access_token or self._token_event.wait(timeout):
             return self._access_token is not None
 
+        if self._is_tokenless_auth():
+            # Pre-dynamic firmware never issues a token: accepting the PIN IS
+            # the pairing, and the TV authorizes this client_id from now on.
+            _LOGGER.info(
+                "PIN accepted; this TV issues no token and authorizes "
+                "client_id %s directly", self.client_id
+            )
+            self._save_static_pairing()
+            self._token_event.set()
+            return True
+
         _LOGGER.warning("PIN accepted but no access token received within %ss", timeout)
         return False
+
+    def _is_tokenless_auth(self) -> bool:
+        """Whether the current auth method belongs to pre-token firmware.
+
+        Deliberately narrow: on newer firmware a missing token is a real
+        failure, and treating it as success would leave a client that cannot
+        reconnect.
+        """
+        return self._auth_method in (AuthMethod.STATIC, AuthMethod.LEGACY)
 
     def _request_token(self, refresh_token: str = ""):
         """Request access token (new or refreshed).
@@ -826,6 +930,12 @@ class VidaaTV:
         self._client.subscribe(get_topic(TOPIC_AUTH_RESPONSE, self.client_id))
         self._client.subscribe(get_topic(TOPIC_AUTH_CODE_RESPONSE, self.client_id))
         self._client.subscribe(get_topic(TOPIC_TOKEN_RESPONSE, self.client_id))
+
+        if self._is_tokenless_auth():
+            # Pre-dynamic firmware has no vidaa_app_connect action. It shows the
+            # PIN when an unauthorized client sends any ordinary command, then
+            # pushes to .../ui_service/data/authentication.
+            return self._publish(get_topic(TOPIC_GET_STATE, self.client_id), "")
 
         # Send vidaa_app_connect to trigger PIN dialog
         topic = get_topic(TOPIC_VIDAA_CONNECT, self.client_id)
@@ -1216,6 +1326,22 @@ class VidaaTV:
 
         topic = get_topic(TOPIC_LAUNCH_APP, self.client_id)
         return self._publish(topic, app_data)
+
+    @property
+    def auth_method(self) -> Optional[AuthMethod]:
+        """The auth method in use - after connect(), the one that worked."""
+        return self._auth_method
+
+    @property
+    def auth_mode(self) -> str:
+        """The auth method in use, as a user-facing mode string.
+
+        Worth persisting after a successful connect: storing what actually
+        worked skips the failed attempts on every later connect.
+        """
+        if self._auth_method == AuthMethod.STATIC:
+            return AUTH_MODE_STATIC
+        return AUTH_MODE_DYNAMIC
 
     @property
     def is_connected(self) -> bool:

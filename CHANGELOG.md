@@ -7,8 +7,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-08-04
+
+### Added
+
+- **Support for pre-dynamic firmware** (`transport_protocol` below 3000, e.g.
+  1140). These TVs predate the dynamic credential algorithm and expect the
+  fixed `hisenseservice`/`multimqttservice` login with a stable client_id -
+  the configuration a Mosquitto bridge uses successfully on that firmware.
+  They were previously rejected with MQTT CONNACK 5 on every attempt.
+  - New `AuthMethod.STATIC`, selected automatically for those protocol versions.
+  - Such TVs issue no token: they answer the PIN with `result: 1` and authorize
+    the client_id itself. `authenticate()` now accepts that as success (for
+    STATIC/LEGACY only) and persists the pairing so reconnects reuse the same
+    client_id. `start_pairing()` triggers their PIN dialog with `gettvstate`,
+    since they have no `vidaa_app_connect` action.
+- **Auth mode selector**: `auth_mode_kwargs()`, the `tv --auth-mode
+  {auto,dynamic,static}` CLI flag (persisted by `tv config add`), and an
+  `auth_mode` key for bridge TV configs. `auto` is the default and behaves as
+  before plus the new fallback.
+- `allow_static_auth` on `VidaaTV`/`AsyncVidaaTV`, to force the dynamic
+  algorithm on a TV that misreports its protocol version.
+
+### Fixed
+
+- **Auth-method fallback never ran when protocol detection succeeded.** It was
+  gated on the protocol being *unknown*, so a TV that reported its version and
+  then rejected the resulting credentials failed outright, without trying any
+  other method. Fallback now runs whenever the TV actually rejects the
+  credentials (CONNACK 4/5).
+- Fallback is now skipped for failures that are not authorization rejections,
+  so an unreachable TV still fails after one timeout instead of walking the
+  whole method chain.
+- Fallback is also skipped for credentials loaded from storage: a rejection
+  there means the pairing was dropped, and switching methods would discard the
+  client_id the TV authorized.
+- A rejected connection no longer leaves paho auto-reconnecting with the same
+  (already stale) credentials, which logged the same CONNACK 5 every few
+  seconds.
+- Credential selection and TLS setup are no longer duplicated between the
+  constructor and the fallback path, which had drifted: the fallback copy
+  ignored `verify_ssl` and never used the bundled RemoteCA.
+
 ### Changed
 
+- `get_auth_method()` returns `AuthMethod.STATIC` (was `LEGACY`) for protocol
+  versions below 3000. `LEGACY` remains, immediately behind it in the fallback
+  order.
+- `get_auth_method_order()` now takes an optional protocol version and returns
+  *all* methods, ordered by likelihood, so a misreported version can no longer
+  make a method unreachable.
+- `generate_credentials_static()` returns the client_id it is given (default
+  `HomeAssistant`) rather than a MAC-derived `{uuid}$vidaa_common`, which no
+  observed TV accepts. With `use_dynamic_auth=False`, the MQTT client_id is now
+  that stable id instead of `hisense_{client_id}_{timestamp}` - a per-run id
+  can never stay paired with firmware that authorizes by client_id.
+- `generate_credentials()` raises `ValueError` for a missing MAC on the dynamic
+  methods instead of failing later with a `TypeError`.
 - Renamed the Home Assistant integration domain `hisense_tv` → `vidaa_tv` and the
   display name to "Vidaa TV" (existing installs must be removed and re-added).
 - The Home Assistant integration now lives in its own repository, `ha_vidaatv`;

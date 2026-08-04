@@ -7,7 +7,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 setup(
     name="pyvidaa",
-    version="2.1.0",
+    version="2.2.0",
     author="Warren Rees",
     author_email="",
     description="Control Hisense/Vidaa Smart TVs via MQTT",

@@ -14,10 +14,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from pyvidaa.client import VidaaTV
+from pyvidaa.config.constants import DEFAULT_MQTT_PASSWORD, DEFAULT_MQTT_USERNAME
 from pyvidaa.config.storage import TokenStorage
-from pyvidaa.credentials import generate_credentials
+from pyvidaa.credentials import generate_credentials, generate_credentials_static
 from pyvidaa.protocol import (
     AuthMethod,
+    auth_mode_kwargs,
     detect_protocol,
     get_auth_method,
     get_auth_method_order,
@@ -70,6 +72,35 @@ def test_legacy_username_has_no_xor():
     assert creds.username == f"his${KNOWN_TIME}"
 
 
+def test_static_credentials_match_the_working_bridge_config():
+    """These are the values a Mosquitto bridge sends to pre-dynamic firmware.
+
+    A TV on that firmware rejects anything else with CONNACK 5, so they must
+    stay byte-exact.
+    """
+    creds = generate_credentials_static()
+    assert creds.username == "hisenseservice"
+    assert creds.password == "multimqttservice"
+    assert creds.client_id == "HomeAssistant"
+
+
+def test_static_credentials_are_stable_across_calls():
+    """The TV authorizes the client_id itself, so it cannot vary per run."""
+    assert generate_credentials_static().client_id == generate_credentials_static().client_id
+
+
+def test_static_auth_needs_no_mac():
+    """Nothing in the static login derives from the MAC."""
+    creds = generate_credentials(mac_address=None, auth_method=AuthMethod.STATIC)
+    assert creds == generate_credentials_static()
+
+
+def test_dynamic_auth_without_a_mac_is_an_error():
+    """It cannot build a client_id, and silently guessing produces CONNACK 5."""
+    with pytest.raises(ValueError):
+        generate_credentials(mac_address=None, auth_method=AuthMethod.MODERN)
+
+
 def test_flat_mac_is_normalised_to_colon_form():
     flat = generate_credentials("56b8884ef719", timestamp=KNOWN_TIME)
     coloned = generate_credentials(KNOWN_UUID, timestamp=KNOWN_TIME)
@@ -82,7 +113,8 @@ def test_flat_mac_is_normalised_to_colon_form():
     "version,expected",
     [
         (None, AuthMethod.MODERN),  # unknown -> modern, then fallback
-        (2999, AuthMethod.LEGACY),
+        (1140, AuthMethod.STATIC),  # reported by real pre-dynamic firmware
+        (2999, AuthMethod.STATIC),
         (3000, AuthMethod.MIDDLE),
         (3285, AuthMethod.MIDDLE),
         (3290, AuthMethod.MODERN),
@@ -94,11 +126,85 @@ def test_get_auth_method_thresholds(version, expected):
 
 
 def test_auth_method_fallback_order():
+    """Unknown protocol: modern first, but every method stays reachable."""
     assert get_auth_method_order() == [
         AuthMethod.MODERN,
         AuthMethod.MIDDLE,
         AuthMethod.LEGACY,
+        AuthMethod.STATIC,
     ]
+
+
+@pytest.mark.parametrize("version", [None, 1140, 2999, 3000, 3290])
+def test_auth_method_order_always_covers_every_method(version):
+    """A misreported version must never make a method unreachable."""
+    assert set(get_auth_method_order(version)) == set(AuthMethod)
+
+
+def test_legacy_protocol_tries_static_first():
+    """Pre-dynamic firmware (like the 1140 TV) leads with static credentials."""
+    assert get_auth_method_order(1140)[0] == AuthMethod.STATIC
+
+
+# --- auth mode (user-facing selector) --------------------------------------
+
+def test_auth_mode_static_skips_detection():
+    """Forcing static must not probe the TV or leave room for a dynamic guess."""
+    kwargs = auth_mode_kwargs("static")
+    assert kwargs["auth_method"] == AuthMethod.STATIC
+    assert kwargs["use_dynamic_auth"] is False
+    assert kwargs["auto_detect_protocol"] is False
+
+
+def test_auth_mode_dynamic_never_selects_static():
+    kwargs = auth_mode_kwargs("dynamic")
+    assert kwargs["use_dynamic_auth"] is True
+    assert kwargs["allow_static_auth"] is False
+
+
+def test_auth_mode_auto_is_the_default():
+    assert auth_mode_kwargs(None) == auth_mode_kwargs("auto")
+    assert auth_mode_kwargs("auto")["use_dynamic_auth"] is True
+
+
+def test_unknown_auth_mode_is_rejected():
+    with pytest.raises(ValueError):
+        auth_mode_kwargs("magic")
+
+
+def test_dynamic_mode_downgrades_a_static_detection_to_legacy(monkeypatch):
+    """auth_mode=dynamic on a 1140 TV must still use a dynamic method."""
+    monkeypatch.setattr("pyvidaa.client.detect_protocol", lambda *a, **k: 1140)
+
+    client = VidaaTV(
+        host="10.0.0.1",
+        mac_address=KNOWN_UUID,
+        use_ssl=False,
+        enable_persistence=False,
+        **auth_mode_kwargs("dynamic"),
+    )
+
+    assert client._auth_method == AuthMethod.LEGACY
+    assert client._username.startswith("his$")
+
+
+def test_static_mode_builds_the_fixed_login_without_probing(monkeypatch):
+    def _boom(*args, **kwargs):
+        raise AssertionError("static mode must not probe the TV")
+
+    monkeypatch.setattr("pyvidaa.client.detect_protocol", _boom)
+
+    client = VidaaTV(
+        host="10.0.0.1",
+        use_ssl=False,
+        enable_persistence=False,
+        **auth_mode_kwargs("static"),
+    )
+
+    assert client._auth_method == AuthMethod.STATIC
+    assert client._username == DEFAULT_MQTT_USERNAME
+    assert client._password == DEFAULT_MQTT_PASSWORD
+    assert client._mqtt_client_id == client.client_id == "HomeAssistant"
 
 
 # --- protocol detection (network mocked) -----------------------------------
@@ -186,12 +292,14 @@ def test_detect_protocol_explicit_port_skips_fallback():
 
 # --- message handling (non-dict payloads must not crash) -------------------
 
-def _make_client():
+def _make_client(auth_method=AuthMethod.MODERN, **kwargs):
     return VidaaTV(
         host="10.0.0.1",
         mac_address=KNOWN_UUID,
         use_ssl=False,
         enable_persistence=False,
+        auth_method=auth_method,
+        **kwargs,
     )
 
 
@@ -226,9 +334,9 @@ def test_authenticate_returns_false_when_token_never_arrives():
 
     Regression: authenticate() returned on PIN-accept and disconnect() then
     killed the loop before the token was saved -> 'Credentials saved' but no
-    token persisted.
+    token persisted. Token-issuing firmware only; see the static case below.
     """
-    client = _make_client()
+    client = _make_client(auth_method=AuthMethod.MODERN)
     client._connected = True
 
     def fake_publish(topic, payload=""):
@@ -261,6 +369,84 @@ def test_authenticate_returns_true_only_after_token_received():
     client._publish = fake_publish
     assert client.authenticate("1234", timeout=2) is True
     assert client._access_token == "ACCESS"
+
+
+def test_static_authenticate_succeeds_without_a_token(tmp_path):
+    """Pre-dynamic firmware answers the PIN with result=1 and issues no token.
+
+    Regression for the 1140-protocol TV: requiring a token made pairing report
+    failure on firmware that authorizes the client_id instead.
+    """
+    storage = TokenStorage(tmp_path / "tokens.json")
+    client = VidaaTV(
+        host="10.0.0.50",
+        use_ssl=False,
+        auth_method=AuthMethod.STATIC,
+        storage=storage,
+        enable_persistence=True,
+    )
+    client._connected = True
+
+    def fake_publish(topic, payload=""):
+        client._authenticated = True
+        client._auth_event.set()  # PIN accepted; no tokenissuance follows
+        return True
+
+    client._publish = fake_publish
+    assert client.authenticate("1234", timeout=0.2) is True
+    assert client._access_token is None
+
+    # The pairing is persisted so the next connect reuses the same client_id.
+    saved = storage.get_token(host="10.0.0.50", port=36669)
+    assert saved is not None
+    assert saved["auth_method"] == "static"
+    assert saved["client_id"] == "HomeAssistant"
+    assert saved["access_token"] is None
+
+
+def test_saved_static_pairing_is_reused_with_the_fixed_login(tmp_path):
+    """A tokenless pairing must reload without a None password."""
+    storage = TokenStorage(tmp_path / "tokens.json")
+    storage.save_token(
+        device_id="10.0.0.50:36669",
+        host="10.0.0.50",
+        port=36669,
+        client_id="HomeAssistant",
+        mqtt_username=DEFAULT_MQTT_USERNAME,
+        auth_method="static",
+    )
+
+    client = VidaaTV(
+        host="10.0.0.50",
+        use_ssl=False,
+        storage=storage,
+        enable_persistence=True,
+    )
+
+    assert client._auth_method == AuthMethod.STATIC
+    assert client._mqtt_client_id == "HomeAssistant"
+    assert client.client_id == "HomeAssistant"
+    assert client._username == DEFAULT_MQTT_USERNAME
+    assert client._password == DEFAULT_MQTT_PASSWORD
+    assert client._authenticated is True
+
+
+def test_static_pairing_never_expires(tmp_path):
+    """It carries no token, so it must not be aged out like one."""
+    storage = TokenStorage(tmp_path / "tokens.json")
+    storage.save_token(
+        device_id="10.0.0.50:36669",
+        host="10.0.0.50",
+        port=36669,
+        client_id="HomeAssistant",
+        mqtt_username=DEFAULT_MQTT_USERNAME,
+        auth_method="static",
+    )
+
+    assert storage.get_token(host="10.0.0.50", port=36669) is not None
+    status = storage.get_token_status(host="10.0.0.50", port=36669)
+    assert status["needs_reauth"] is False
+    assert status["needs_refresh"] is False
 
 
 def test_handle_token_response_persists_and_is_retrievable(tmp_path):
@@ -313,6 +499,129 @@ def test_get_token_requires_keyword_host_port(tmp_path):
     assert storage.get_token(host="10.0.0.50", port=36669) is not None
     # The old positional bug (host lands in device_id slot) finds nothing.
     assert storage.get_token("10.0.0.50", 36669) is None
+
+
+# --- auth-method fallback --------------------------------------------------
+
+class _FakePaho:
+    """Stand-in for paho's Client that reports a scripted CONNACK code.
+
+    `results` maps the MQTT username it is given to the CONNACK rc to report,
+    so a test can say "static works, everything else is rejected".
+    """
+
+    def __init__(self, client, results):
+        self._owner = client
+        self._results = results
+        self._username = None
+
+    # -- configuration paho would do --
+    def username_pw_set(self, username, password=None):
+        self._username = username
+
+    def tls_set(self, **kwargs):
+        pass
+
+    def tls_set_context(self, context=None):
+        pass
+
+    def tls_insecure_set(self, value):
+        pass
+
+    def subscribe(self, topic):
+        pass
+
+    # -- connection lifecycle --
+    def connect(self, host, port, keepalive=60):
+        pass
+
+    def loop_start(self):
+        rc = self._results.get(self._username, 5)
+        self._owner._on_connect(self, None, {}, rc)
+
+    def loop_stop(self):
+        pass
+
+    def disconnect(self):
+        pass
+
+
+def _patch_paho(client, results):
+    """Route this client's paho usage through _FakePaho, including rebuilds."""
+    def build(self=client):
+        self._client = _FakePaho(self, results)
+        self._client.username_pw_set(self._username, self._password)
+
+    client._build_mqtt_client = build
+    build()
+
+
+def test_connect_falls_back_after_a_detected_protocol_is_rejected():
+    """The reported bug: detection succeeded, so no fallback was ever tried.
+
+    A 1140 TV leads with static; if that were rejected the client must still
+    walk the remaining methods instead of giving up on the first CONNACK 5.
+    """
+    client = _make_client(auth_method=AuthMethod.LEGACY)
+    client.use_dynamic_auth = True
+    client._protocol_version = 1140  # detection succeeded - used to block fallback
+
+    # Only the static login is accepted by this TV.
+    _patch_paho(client, {DEFAULT_MQTT_USERNAME: 0})
+
+    assert client.connect(timeout=0.3) is True
+    assert client._auth_method == AuthMethod.STATIC
+    assert client._username == DEFAULT_MQTT_USERNAME
+    assert client._password == DEFAULT_MQTT_PASSWORD
+    assert client.client_id == "HomeAssistant"
+
+
+def test_connect_does_not_fall_back_when_the_tv_is_unreachable():
+    """An offline TV must fail fast, not walk the whole method chain.
+
+    Otherwise every poll against a sleeping TV costs 4x the connect timeout.
+    """
+    client = _make_client(auth_method=AuthMethod.MODERN)
+    client.use_dynamic_auth = True
+
+    attempts = {"n": 0}
+
+    def build(self=client):
+        attempts["n"] += 1
+        fake = _FakePaho(self, {})
+        fake.connect = lambda *a, **k: (_ for _ in ()).throw(OSError("unreachable"))
+        self._client = fake
+
+    client._build_mqtt_client = build
+    build()
+
+    assert client.connect(timeout=0.3) is False
+    assert attempts["n"] == 1  # no rebuild == no fallback attempt
+
+
+def test_connect_does_not_fall_back_for_saved_credentials():
+    """A rejected saved pairing needs re-pairing, not a different algorithm.
+
+    Switching methods would also discard the client_id the TV authorized.
+    """
+    client = _make_client(auth_method=AuthMethod.MODERN)
+    client.use_dynamic_auth = True
+    client._using_saved_creds = True
+
+    rebuilds = {"n": 0}
+    original_username = client._username
+
+    def build(self=client):
+        rebuilds["n"] += 1
+        self._client = _FakePaho(self, {})  # everything rejected with rc 5
+        self._client.username_pw_set(self._username, self._password)
+
+    client._build_mqtt_client = build
+    build()
+
+    assert client.connect(timeout=0.3) is False
+    assert rebuilds["n"] == 1
+    assert client._username == original_username
 
 
 def test_bundled_remote_ca_is_loadable_public_cert():

@@ -21,6 +21,10 @@ from .constants import (
     # Authentication
     DEFAULT_MQTT_USERNAME,
     DEFAULT_MQTT_PASSWORD,
+    AUTH_MODE_AUTO,
+    AUTH_MODE_DYNAMIC,
+    AUTH_MODE_STATIC,
+    AUTH_MODES,
     # Client identification
     DEFAULT_CLIENT_ID,
     DEFAULT_BRAND,
@@ -96,6 +100,10 @@ __all__ = [
     "BROADCAST_ADDR",
     "DEFAULT_MQTT_USERNAME",
     "DEFAULT_MQTT_PASSWORD",
+    "AUTH_MODE_AUTO",
+    "AUTH_MODE_DYNAMIC",
+    "AUTH_MODE_STATIC",
+    "AUTH_MODES",
     "DEFAULT_CLIENT_ID",
     "DEFAULT_BRAND",
     "PROTOCOL_MODERN_THRESHOLD",

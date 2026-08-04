@@ -72,6 +72,45 @@ Common issues and solutions for hisense2mqtt.
    tail -f /var/log/mosquitto/mosquitto.log
    ```
 
+### TV Rejects the Connection (CONNACK code 5)
+
+**Symptoms:**
+```
+Connection to 192.168.1.50:36669 failed with code 5 (not authorized ...)
+```
+
+Code 5 arrives *after* the TLS handshake completes, so the client certificates
+are fine - the TV is rejecting the username/password/client_id.
+
+**Solutions:**
+
+1. **Old firmware needs static credentials.** Check the reported protocol:
+   ```bash
+   tv discover --method probe --verbose      # look for transport_protocol
+   ```
+   Anything below 3000 (e.g. `1140`) predates the dynamic credential algorithm.
+   `auto` mode now tries static first for those, but you can force it:
+   ```bash
+   tv --ip 192.168.1.50 --auth-mode static status
+   tv config add 192.168.1.50 --auth-mode static    # persist it
+   ```
+   These TVs issue no token - they authorize the client_id after the PIN - so
+   the pairing is stored without one.
+
+2. **Check the TV clock.** Dynamic credentials are time-based, so a wrong
+   date/time, timezone, or DST setting on the TV gets them rejected.
+
+3. **Clear a stale saved token**, e.g. after a TV factory reset or a pairing
+   reset:
+   ```bash
+   tv auth clear
+   tv auth pair
+   ```
+
+4. **Confirm the MAC is right.** Dynamic credentials hash the TV's MAC; the TV
+   recomputes it from its own. `tv config show` should list a real MAC, not the
+   IP placeholder.
+
 ## Wake-on-LAN Issues
 
 ### TV Won't Turn On

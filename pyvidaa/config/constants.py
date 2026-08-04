@@ -34,6 +34,13 @@ DEFAULT_BRAND = "his"
 # Determines which authentication algorithm to use
 PROTOCOL_MODERN_THRESHOLD = 3290  # >= uses modern auth
 PROTOCOL_MIDDLE_THRESHOLD = 3000  # >= uses middle, < 3290
+                                  # below this: pre-dynamic, static auth
+
+# === Authentication Mode (user-facing selector) ===
+AUTH_MODE_AUTO = "auto"        # detect the protocol, then fall back as needed
+AUTH_MODE_DYNAMIC = "dynamic"  # force the timestamp-hash algorithm
+AUTH_MODE_STATIC = "static"    # force the fixed pre-dynamic firmware login
+AUTH_MODES = (AUTH_MODE_AUTO, AUTH_MODE_DYNAMIC, AUTH_MODE_STATIC)
 
 # === Credential Generation Constants ===
 # From libmqttcrypt.so reverse engineering

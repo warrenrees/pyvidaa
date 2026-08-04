@@ -14,6 +14,7 @@ import paho.mqtt.client as mqtt
 # Import from sibling package
 sys.path.insert(0, str(__file__).rsplit("/", 2)[0])
 from pyvidaa.client import VidaaTV
+from pyvidaa.protocol import auth_mode_kwargs
 from pyvidaa.wol import wake_tv
 from pyvidaa.keys import ALL_KEYS
 
@@ -118,9 +119,9 @@ class VidaaMQTTBridge:
             host=tv_config["host"],
             port=tv_config.get("port", 36669),
             mac_address=tv_config.get("uuid"),
-            use_dynamic_auth=True,
             brand=self._resolve_brand(tv_config),
             on_state_change=self._on_tv_state_change,
+            **auth_mode_kwargs(tv_config.get("auth_mode")),
         )
 
     def _resolve_brand(self, tv_config: dict) -> str:

@@ -16,6 +16,7 @@ Where:
 - XOR constant = 0x5698_1477_2b03_a968
 
 Authentication methods by transport protocol:
+- STATIC (< 3000): no dynamic credentials at all - fixed hisenseservice login
 - LEGACY (< 3000): no XOR username, VALUE_SUFFIX_LEGACY
 - MIDDLE (3000-3285): XOR username, VALUE_SUFFIX_LEGACY
 - MODERN (>= 3290): XOR username, VALUE_SUFFIX_MODERN
@@ -31,6 +32,7 @@ from .config import (
     VALUE_SUFFIX_MODERN,
     VALUE_SUFFIX_LEGACY,
     TIME_XOR_CONSTANT,
+    DEFAULT_CLIENT_ID,
     DEFAULT_MQTT_USERNAME,
     DEFAULT_MQTT_PASSWORD,
 )
@@ -62,21 +64,25 @@ def _sum_digits(n: int) -> int:
 
 
 def generate_credentials(
-    mac_address: str,
+    mac_address: Optional[str] = None,
     brand: str = "his",
     operation: str = "vidaacommon",
     timestamp: Optional[int] = None,
     auth_method: Optional["AuthMethod"] = None,
+    client_id: str = DEFAULT_CLIENT_ID,
 ) -> MQTTCredentials:
     """Generate MQTT credentials for Hisense VIDAA TV connection.
 
     Args:
-        mac_address: Device MAC address or UUID (format: "AA:BB:CC:DD:EE:FF")
+        mac_address: Device MAC address or UUID (format: "AA:BB:CC:DD:EE:FF").
+                     Required for every method except STATIC, which does not
+                     derive anything from it.
         brand: Brand identifier (default: "his" for Hisense)
         operation: Operation mode ("vidaacommon" or "vidaavoice")
         timestamp: Unix timestamp in SECONDS (default: current time)
-        auth_method: Authentication method (LEGACY, MIDDLE, or MODERN).
+        auth_method: Authentication method (STATIC, LEGACY, MIDDLE, or MODERN).
                      Default: MODERN for backwards compatibility.
+        client_id: MQTT/topic client id, used by STATIC only
 
     Returns:
         MQTTCredentials with client_id, username, and password
@@ -86,6 +92,15 @@ def generate_credentials(
 
     if auth_method is None:
         auth_method = AuthMethod.MODERN
+
+    # Pre-dynamic firmware: a fixed login, nothing derived from MAC or clock.
+    if auth_method == AuthMethod.STATIC:
+        return generate_credentials_static(client_id=client_id)
+
+    if not mac_address:
+        raise ValueError(
+            f"{auth_method.value} auth needs a MAC address to build a client_id"
+        )
 
     if timestamp is None:
         timestamp = int(time.time())
@@ -134,16 +149,32 @@ def generate_credentials(
     )
 
 
-def generate_credentials_static(mac_address: str) -> MQTTCredentials:
-    """Generate static credentials for older Hisense TVs.
+def generate_credentials_static(
+    mac_address: Optional[str] = None,
+    client_id: str = DEFAULT_CLIENT_ID,
+) -> MQTTCredentials:
+    """Generate static credentials for pre-dynamic Hisense firmware.
 
-    Some older TV models accept static credentials without the dynamic algorithm.
-    Try this as a fallback if dynamic credentials don't work.
+    TVs whose transport_protocol is below PROTOCOL_MIDDLE_THRESHOLD predate the
+    dynamic credential algorithm and authorize by client_id after a PIN, using
+    the fixed login baked into libmqttcrypt.so. These are the same values a
+    Mosquitto bridge sends, which is the configuration known to work on that
+    firmware:
+
+        username hisenseservice
+        password multimqttservice
+        clientid HomeAssistant
+
+    Args:
+        mac_address: Ignored; accepted so callers can pass it uniformly
+        client_id: MQTT client id, which is also the topic client id the TV
+                   authorizes. Must stay stable across reconnects.
+
+    Returns:
+        MQTTCredentials with client_id, username, and password
     """
-    uuid = mac_address.replace(":", "").replace("-", "").upper()
-
     return MQTTCredentials(
-        client_id=f"{uuid}$vidaa_common",
+        client_id=client_id,
         username=DEFAULT_MQTT_USERNAME,
         password=DEFAULT_MQTT_PASSWORD
     )
