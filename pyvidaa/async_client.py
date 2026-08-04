@@ -267,15 +267,19 @@ class AsyncVidaaTV:
             await self._run_in_executor(self._client.disconnect)
 
     # Authentication
-    async def async_start_pairing(self) -> bool:
+    async def async_start_pairing(self, wait_for_pin: float = 0.0) -> bool:
         """Start pairing process to show PIN on TV.
 
+        Args:
+            wait_for_pin: Seconds to wait for the TV to confirm the PIN dialog
+                is on screen. 0 sends the request and returns immediately.
+
         Returns:
-            True if pairing request sent
+            True if pairing request sent (and confirmed, when wait_for_pin set)
         """
         def _start_pairing():
             client = self._ensure_client()
-            return client.start_pairing()
+            return client.start_pairing(wait_for_pin=wait_for_pin)
 
         return await self._run_in_executor(_start_pairing)
 

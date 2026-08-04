@@ -505,12 +505,22 @@ def _probe_ip_port(
         if mac and ':' not in mac and len(mac) == 12:
             mac = ':'.join(mac[i:i+2] for i in range(0, 12, 2))
 
-        # Check for Vidaa support - only consider devices with vidaa_support=1
+        # Only consider VIDAA devices. Older firmware reports vidaa_support=0
+        # while still speaking the protocol, so transport_protocol also counts:
+        # it comes from the same VIDAA-specific descriptor, and unrelated UPnP
+        # MediaRenderers on the network do not publish it.
         vidaa_support = raw_data.get('vidaa_support', '0')
-        if vidaa_support != '1':
-            _LOGGER.debug("Device at %s does not have vidaa_support=1 (got %s), skipping",
-                         ip, vidaa_support)
+        transport_protocol = raw_data.get('transport_protocol')
+        if vidaa_support != '1' and not transport_protocol:
+            _LOGGER.debug(
+                "Device at %s is not a VIDAA TV (vidaa_support=%s, no "
+                "transport_protocol), skipping", ip, vidaa_support)
             return None
+        if vidaa_support != '1':
+            _LOGGER.debug(
+                "Device at %s reports vidaa_support=%s but transport_protocol=%s; "
+                "treating it as an older VIDAA TV",
+                ip, vidaa_support, transport_protocol)
 
         device = DiscoveredTV(
             ip=ip,

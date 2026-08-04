@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.1] - 2026-08-04
+
+### Fixed
+
+- **Static auth reused one MQTT client id for every client, causing an endless
+  reconnect loop.** MQTT requires a broker to drop the older session whenever a
+  client id is reused, so two live pyvidaa clients - a retried config flow, or
+  a user's existing Mosquitto bridge on the same id - kicked each other roughly
+  once a second, and pairing never survived long enough for the TV to show its
+  PIN. The MQTT client id is now unique per connection, while the *topic*
+  client id (the identity the TV actually authorizes after a PIN, and what gets
+  persisted) stays stable. 2.2.0 collapsed the two into one value.
+- **The TV's "PIN is on screen" notification was discarded.** It arrives as an
+  empty payload on `.../ui_service/data/authentication`, so it fell through to
+  JSON parsing and was dropped - leaving no way to distinguish a displayed PIN
+  from a TV that ignored the request. It now sets `needs_authentication()`,
+  fires the `on_auth_required` callback, and can be awaited via
+  `start_pairing(wait_for_pin=<seconds>)`, which still defaults to the previous
+  non-blocking behaviour.
+- **Discovery rejected the very TVs this release added support for.** Older
+  firmware omits `vidaa_support` from its UPnP descriptor entirely, so
+  `probe_ip()` skipped it and no MAC, brand or protocol version was resolved. A
+  descriptor carrying `transport_protocol` now counts as proof it is a VIDAA
+  TV; unrelated MediaRenderers answering the same SSDP search (Sonos, DLNA
+  speakers) publish no such field and are still ignored.
+- An unexpected disconnect is now logged with its return code. Previously a TV
+  that accepted a connection and immediately closed it produced nothing but a
+  stream of successful "Connected to TV" lines with no hint as to why.
+
 ## [2.2.0] - 2026-08-04
 
 ### Added

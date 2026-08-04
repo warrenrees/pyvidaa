@@ -204,7 +204,46 @@ def test_static_mode_builds_the_fixed_login_without_probing(monkeypatch):
     assert client._auth_method == AuthMethod.STATIC
     assert client._username == DEFAULT_MQTT_USERNAME
     assert client._password == DEFAULT_MQTT_PASSWORD
-    assert client._mqtt_client_id == client.client_id == "HomeAssistant"
+    assert client.client_id == "HomeAssistant"
+    assert client._mqtt_client_id.startswith("HomeAssistant_")
+
+
+def test_static_mqtt_client_id_is_unique_but_topic_id_is_stable():
+    """Two live clients must not share an MQTT client id.
+
+    Regression: they did, and MQTT 3.1.1 s3.1.4 makes the broker drop the older
+    session whenever a client id is reused - so two pyvidaa clients (a retried
+    config flow, or a user's existing Mosquitto bridge) kicked each other in a
+    ~1s loop and pairing never survived long enough to show a PIN. The topic id
+    is the identity the TV authorizes, so that one has to stay stable.
+    """
+    a = VidaaTV(host="10.0.0.1", use_ssl=False, enable_persistence=False,
+                **auth_mode_kwargs("static"))
+    b = VidaaTV(host="10.0.0.1", use_ssl=False, enable_persistence=False,
+                **auth_mode_kwargs("static"))
+
+    assert a._mqtt_client_id != b._mqtt_client_id
+    assert a.client_id == b.client_id == "HomeAssistant"
+
+
+def test_static_pairing_persists_the_topic_id_not_the_mqtt_id(tmp_path):
+    """The saved client_id must be the one the TV authorized."""
+    storage = TokenStorage(tmp_path / "tokens.json")
+    client = VidaaTV(host="10.0.0.50", use_ssl=False, storage=storage,
+                     enable_persistence=True, **auth_mode_kwargs("static"))
+    client._connected = True
+
+    def fake_publish(topic, payload=""):
+        client._authenticated = True
+        client._auth_event.set()
+        return True
+
+    client._publish = fake_publish
+    assert client.authenticate("1234", timeout=0.2) is True
+
+    saved = storage.get_token(host="10.0.0.50", port=36669)
+    assert saved["client_id"] == "HomeAssistant"
+    assert saved["client_id"] != client._mqtt_client_id
 
 
 # --- protocol detection (network mocked) -----------------------------------
@@ -424,8 +463,11 @@ def test_saved_static_pairing_is_reused_with_the_fixed_login(tmp_path):
     )
 
     assert client._auth_method == AuthMethod.STATIC
-    assert client._mqtt_client_id == "HomeAssistant"
+    # The authorized identity is the topic client id, restored verbatim.
     assert client.client_id == "HomeAssistant"
+    # The MQTT client id is per-connection and must NOT be the saved one.
+    assert client._mqtt_client_id != client.client_id
+    assert client._mqtt_client_id.startswith("HomeAssistant_")
     assert client._username == DEFAULT_MQTT_USERNAME
     assert client._password == DEFAULT_MQTT_PASSWORD
     assert client._authenticated is True
@@ -499,6 +541,73 @@ def test_get_token_requires_keyword_host_port(tmp_path):
     assert storage.get_token(host="10.0.0.50", port=36669) is not None
     # The old positional bug (host lands in device_id slot) finds nothing.
     assert storage.get_token("10.0.0.50", 36669) is None
+
+
+# --- the TV telling us the PIN is on screen --------------------------------
+
+def test_empty_authentication_push_signals_the_pin_is_showing():
+    """The TV announces the PIN dialog with an EMPTY payload on that topic.
+
+    Regression: it fell through to JSON parsing and was discarded, so there was
+    no way to tell a displayed PIN from a TV that ignored the request - the
+    config flow asked for a code the user could not see.
+    """
+    client = _make_client(auth_method=AuthMethod.STATIC)
+    seen = []
+    client.on_auth_required = lambda: seen.append(True)
+
+    msg = MagicMock()
+    msg.topic = "/remoteapp/mobile/HomeAssistant/ui_service/data/authentication"
+    msg.payload = b""
+
+    client._on_message(None, None, msg)
+
+    assert client._pin_event.is_set()
+    assert client.needs_authentication() is True
+    assert seen == [True]
+
+
+def test_start_pairing_can_wait_for_the_tv_to_confirm():
+    client = _make_client(auth_method=AuthMethod.STATIC)
+    client._connected = True
+    client._client = MagicMock()
+
+    def fake_publish(topic, payload=""):
+        # Simulate the TV pushing the "PIN is up" notification.
+        msg = MagicMock()
+        msg.topic = "/remoteapp/mobile/HomeAssistant/ui_service/data/authentication"
+        msg.payload = b""
+        client._on_message(None, None, msg)
+        return True
+
+    client._publish = fake_publish
+    assert client.start_pairing(wait_for_pin=2) is True
+
+
+def test_start_pairing_reports_failure_when_the_tv_stays_silent():
+    """A TV that never shows the dialog must not look like a success."""
+    client = _make_client(auth_method=AuthMethod.STATIC)
+    client._connected = True
+    client._client = MagicMock()
+    client._publish = lambda topic, payload="": True
+
+    assert client.start_pairing(wait_for_pin=0.2) is False
+    # Default stays non-blocking for callers that don't opt in.
+    assert client.start_pairing() is True
+
+
+def test_legacy_pairing_is_triggered_with_gettvstate():
+    """Pre-dynamic firmware has no vidaa_app_connect action."""
+    client = _make_client(auth_method=AuthMethod.STATIC)
+    client._connected = True
+    client._client = MagicMock()
+    published = []
+    client._publish = lambda topic, payload="": published.append(topic) or True
+
+    client.start_pairing()
+    assert published == [
+        "/remoteapp/tv/ui_service/HomeAssistant/actions/gettvstate"
+    ]
 
 
 # --- auth-method fallback --------------------------------------------------
@@ -692,3 +801,51 @@ def test_cli_quiet_excepthook_handles_cert_required(monkeypatch, capsys):
 
     cli._quiet_mqtt_thread_excepthook(OtherArgs())
     assert len(seen) == 1
+
+
+# --- discovery must not reject older firmware ------------------------------
+
+# The real descriptor from a HE58A6100FUWTS on protocol 1140: no vidaa_support
+# key at all, but transport_protocol is present.
+LEGACY_DESCRIPTOR = (
+    '<?xml version="1.0"?>'
+    '<root xmlns="urn:schemas-upnp-org:device-1-0"><device>'
+    "<friendlyName>Studio TV</friendlyName><modelName>Renderer</modelName>"
+    "<modelDescription>#CAP#\nmac=a062fb6677ca\nmacWifi=f03575295ae0\n"
+    "macEthernet=a062fb6677ca\nip=192.168.67.28\nregion=4\ncountry=CZE\n"
+    "model_name=HE58A6100FUWTS_0100\ntv_version=V0000.01.00F.P0220\n"
+    "language=eng\ntransport_protocol=1140\nemanual=0\nnetwork_wakeup=1\n"
+    "voice=1\ncap=0\nmqttport=36669</modelDescription>"
+    "</device></root>"
+)
+
+# A non-VIDAA MediaRenderer answering the same SSDP search must still be
+# rejected - it has no transport_protocol.
+SONOS_DESCRIPTOR = (
+    '<?xml version="1.0"?>'
+    '<root xmlns="urn:schemas-upnp-org:device-1-0"><device>'
+    "<friendlyName>Sonos Era 300</friendlyName>"
+    "<modelDescription>Sonos Era 300</modelDescription>"
+    "</device></root>"
+)
+
+
+def test_probe_accepts_older_firmware_without_vidaa_support():
+    """Regression: these TVs omit vidaa_support, so discovery skipped them."""
+    from pyvidaa.discovery import probe_ip
+
+    with patch("urllib.request.urlopen",
+               return_value=_mock_urlopen_returning(LEGACY_DESCRIPTOR)):
+        device = probe_ip("192.168.67.28", timeout=1)
+
+    assert device is not None
+    assert device.protocol_version == "1140"
+    assert device.mac == "a0:62:fb:66:77:ca"
+
+
+def test_probe_still_rejects_non_vidaa_media_renderers():
+    from pyvidaa.discovery import probe_ip
+
+    with patch("urllib.request.urlopen",
+               return_value=_mock_urlopen_returning(SONOS_DESCRIPTOR)):
+        assert probe_ip("192.168.67.248", timeout=1) is None

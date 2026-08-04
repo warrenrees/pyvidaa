@@ -9,6 +9,7 @@ import logging
 import ssl
 import threading
 import time
+import uuid
 from typing import Any, Callable, Optional
 
 import paho.mqtt.client as mqtt
@@ -121,9 +122,12 @@ class VidaaTV:
         self.port = port
         self.client_id = client_id
         # The client_id as supplied, before any auth method overwrote
-        # self.client_id with a generated one. STATIC auth uses it verbatim for
-        # both the MQTT client id and the topic client id.
+        # self.client_id with a generated one.
         self._base_client_id = client_id
+        # The topic client id for static auth - the identity the TV authorizes
+        # after a PIN, so it must survive restarts. Distinct from the MQTT
+        # client id, which only has to be unique on the TV's broker.
+        self._topic_client_id = client_id
         self.use_ssl = use_ssl
         self.verify_ssl = verify_ssl
         self.enable_persistence = enable_persistence
@@ -170,6 +174,9 @@ class VidaaTV:
         self._last_connack_rc: Optional[int] = None
         self._response_event = threading.Event()
         self._auth_event = threading.Event()
+        # Set when the TV confirms the PIN dialog is on screen, so pairing can
+        # wait for that instead of assuming it worked.
+        self._pin_event = threading.Event()
         # Set once the access token has actually been received and saved, so
         # pairing can wait for persistence instead of returning on PIN-accept.
         self._token_event = threading.Event()
@@ -195,8 +202,11 @@ class VidaaTV:
                 # client_id itself once the PIN is accepted. Rebuild the fixed
                 # login rather than reading a password back off disk.
                 self._auth_method = AuthMethod.STATIC
-                self._mqtt_client_id = saved_creds["client_id"]
+                # Restore the authorized topic id; the MQTT id is per-connection
+                # and deliberately not reused.
+                self._topic_client_id = saved_creds["client_id"]
                 self.client_id = saved_creds["client_id"]
+                self._mqtt_client_id = self._static_mqtt_client_id()
                 self._username = DEFAULT_MQTT_USERNAME
                 self._password = DEFAULT_MQTT_PASSWORD
                 self._authenticated = True
@@ -205,7 +215,7 @@ class VidaaTV:
                     self._protocol_version = saved_creds["protocol_version"]
                 _LOGGER.debug(
                     "Using saved static-auth pairing: client_id=%s",
-                    self._mqtt_client_id,
+                    self.client_id,
                 )
 
             elif saved_creds.get("needs_reauth"):
@@ -272,8 +282,8 @@ class VidaaTV:
                 # id itself rather than issuing a token. Honour any
                 # username/password the caller supplied.
                 self._auth_method = AuthMethod.STATIC
-                self._mqtt_client_id = self._base_client_id
-                self.client_id = self._base_client_id
+                self.client_id = self._topic_client_id
+                self._mqtt_client_id = self._static_mqtt_client_id()
                 self._username = username
                 self._password = password
                 self._build_mqtt_client()
@@ -328,22 +338,41 @@ class VidaaTV:
                 context.verify_mode = ssl.CERT_NONE
             self._client.tls_set_context(context)
 
+    def _static_mqtt_client_id(self) -> str:
+        """A unique MQTT client id for a static-auth connection.
+
+        The TV authorizes the *topic* client id (self.client_id), not this one -
+        which is how a Mosquitto bridge pairs while using a fixed MQTT clientid
+        for every install. This id only has to be unique on the TV's broker:
+        two live connections sharing one client id make the broker kick each in
+        turn (MQTT 3.1.1 s3.1.4), producing an endless reconnect loop.
+        """
+        return f"{self._base_client_id}_{uuid.uuid4().hex[:8]}"
+
     def _apply_auth_method(self, method: AuthMethod) -> None:
         """Generate credentials for `method` and rebuild the paho client."""
         creds = generate_credentials(
             mac_address=self.mac_address,
             brand=self.brand,
             auth_method=method,
-            client_id=self._base_client_id,
+            client_id=self._topic_client_id,
         )
         self._auth_method = method
-        self._mqtt_client_id = creds.client_id
         self._username = creds.username
         self._password = creds.password
-        # The MQTT client_id doubles as the topic client_id.
         self.client_id = creds.client_id
+
+        if method == AuthMethod.STATIC:
+            # Topic id stays put (the TV authorized it); MQTT id must not clash.
+            self._mqtt_client_id = self._static_mqtt_client_id()
+        else:
+            # Dynamic auth hashes the client_id, and the TV recomputes it, so
+            # the MQTT id has to be exactly the generated one.
+            self._mqtt_client_id = creds.client_id
+
         _LOGGER.debug(
-            "Using %s auth: client_id=%s", method.value, creds.client_id[:30]
+            "Using %s auth: client_id=%s (mqtt id %s)",
+            method.value, self.client_id[:30], self._mqtt_client_id[:40],
         )
         self._build_mqtt_client()
 
@@ -618,10 +647,35 @@ class VidaaTV:
 
     def _on_disconnect(self, client, userdata, rc):
         """Handle disconnection callback."""
+        was_connected = self._connected
         self._connected = False
+        if rc == 0 or not was_connected:
+            return
+        # An unexpected drop. Log it: without this, a TV that accepts the
+        # connection and then closes it looks like a stream of successful
+        # "Connected to TV" lines with nothing to explain the repetition.
+        _LOGGER.warning(
+            "Disconnected from %s:%s (code %s) - the TV closed the connection. "
+            "If this repeats every few seconds, another client is likely using "
+            "the same MQTT client id %r",
+            self.host, self.port, rc, self._mqtt_client_id,
+        )
 
     def _on_message(self, client, userdata, msg):
         """Handle incoming messages."""
+        # A push to .../ui_service/data/authentication means the TV has put the
+        # PIN dialog on screen. It carries an empty payload, so this has to be
+        # handled before any JSON parsing - otherwise the one signal that
+        # pairing actually started is silently dropped.
+        if msg.topic.endswith("/ui_service/data/authentication"):
+            _LOGGER.info("TV is displaying the pairing PIN")
+            self._auth_required = True
+            self._pin_event.set()
+            if self.on_auth_required:
+                self.on_auth_required()
+            if not msg.payload:
+                return
+
         try:
             payload = json.loads(msg.payload.decode())
 
@@ -758,7 +812,9 @@ class VidaaTV:
             port=self.port,
             access_token=None,
             refresh_token=None,
-            client_id=self._mqtt_client_id,
+            # The topic id, which is what the TV authorized - NOT the
+            # per-connection MQTT id.
+            client_id=self.client_id,
             mqtt_username=self._username,
             uuid=self.mac_address,
             auth_method=AuthMethod.STATIC.value,
@@ -918,32 +974,54 @@ class VidaaTV:
         _LOGGER.warning("Token refresh failed")
         return False
 
-    def start_pairing(self) -> bool:
+    def start_pairing(self, wait_for_pin: float = 0.0) -> bool:
         """Start the pairing process to show PIN on TV.
 
         Call this to initiate pairing, then call authenticate() with the PIN.
 
+        Args:
+            wait_for_pin: Seconds to wait for the TV to confirm the PIN dialog
+                is on screen (it pushes to .../ui_service/data/authentication).
+                0 (the default) sends the request and returns immediately,
+                preserving the historic behaviour.
+
         Returns:
-            True if pairing request sent successfully
+            True if the pairing request was sent - and, when wait_for_pin is
+            set, if the TV confirmed the dialog is showing.
         """
         # Subscribe to auth topics
         self._client.subscribe(get_topic(TOPIC_AUTH_RESPONSE, self.client_id))
         self._client.subscribe(get_topic(TOPIC_AUTH_CODE_RESPONSE, self.client_id))
         self._client.subscribe(get_topic(TOPIC_TOKEN_RESPONSE, self.client_id))
 
+        self._pin_event.clear()
+
         if self._is_tokenless_auth():
             # Pre-dynamic firmware has no vidaa_app_connect action. It shows the
             # PIN when an unauthorized client sends any ordinary command, then
             # pushes to .../ui_service/data/authentication.
-            return self._publish(get_topic(TOPIC_GET_STATE, self.client_id), "")
+            sent = self._publish(get_topic(TOPIC_GET_STATE, self.client_id), "")
+        else:
+            # Send vidaa_app_connect to trigger PIN dialog
+            topic = get_topic(TOPIC_VIDAA_CONNECT, self.client_id)
+            sent = self._publish(topic, {
+                "app_version": 2,
+                "connect_result": 0,
+                "device_type": "Mobile App"
+            })
 
-        # Send vidaa_app_connect to trigger PIN dialog
-        topic = get_topic(TOPIC_VIDAA_CONNECT, self.client_id)
-        return self._publish(topic, {
-            "app_version": 2,
-            "connect_result": 0,
-            "device_type": "Mobile App"
-        })
+        if not sent or not wait_for_pin:
+            return sent
+
+        if self._pin_event.wait(wait_for_pin):
+            return True
+
+        _LOGGER.warning(
+            "TV did not confirm the PIN dialog within %ss. It may already have "
+            "authorized client_id %r (in which case no PIN is shown), or the "
+            "screen is off.", wait_for_pin, self.client_id,
+        )
+        return False
 
     def is_authenticated(self) -> bool:
         """Check if currently authenticated with the TV."""
