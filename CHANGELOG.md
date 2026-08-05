@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-08-04
+
+Version 2.2.7 was declared on the repository but never released; nothing was
+ever published under it. This release supersedes it, so that number is skipped
+rather than reused for different code.
+
 ### Added
 
 - `python -m pyvidaa` runs the CLI straight from a source checkout, with no
