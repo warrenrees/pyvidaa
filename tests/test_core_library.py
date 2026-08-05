@@ -1172,3 +1172,74 @@ def test_an_unrelated_broadcast_cannot_become_the_tv_state(topic):
     client._on_message(None, None, msg)
 
     assert client._state == {"statetype": "app", "name": "youtube"}
+
+
+# --- what the two fake_sleep states actually mean ---------------------------
+
+# Captured verbatim from a real TV. The trailing digit is a DIRECTION, not a
+# sleep depth:
+#   press power (to standby) -> fake_sleep_0
+#   press power (to wake)    -> fake_sleep_1, then remote_launcher 0.6s later
+CAPTURED_GOING_TO_SLEEP = {
+    "curtime": 0, "mediatype": "0", "name": "0", "playstate": "0",
+    "resolving": "0", "starttime": 0, "statetype": "fake_sleep_0", "totaltime": 0,
+}
+CAPTURED_WAKING = dict(CAPTURED_GOING_TO_SLEEP, statetype="fake_sleep_1")
+CAPTURED_AWAKE = {"statetype": "remote_launcher"}
+CAPTURED_APP = {"statetype": "app", "name": "youtube", "url": "youtube", "appId": "3"}
+
+
+@pytest.mark.parametrize(
+    "state,asleep",
+    [
+        (CAPTURED_GOING_TO_SLEEP, True),
+        # fake_sleep_1 is the TV WAKING. Matching "fake_sleep" as a prefix
+        # would report it off at the exact moment it is switched on.
+        (CAPTURED_WAKING, False),
+        (CAPTURED_AWAKE, False),
+        (CAPTURED_APP, False),
+        ({"statetype": "sourceswitch", "sourceid": "HDMI2"}, False),
+        ({}, False),
+        (None, False),
+    ],
+)
+def test_only_fake_sleep_0_means_asleep(state, asleep):
+    from pyvidaa.client import is_sleeping
+
+    assert is_sleeping(state) is asleep
+
+
+def test_a_waking_tv_is_reported_as_on():
+    """fake_sleep_1 arrives when the user presses power to turn the TV ON."""
+    client = _make_client(auth_method=AuthMethod.STATIC)
+    client._connected = True
+    client._publish = lambda topic, payload="": True
+    client._state = dict(CAPTURED_WAKING)
+    client._state_event.set()
+
+    assert client._is_tv_on(timeout=0.2) is True
+
+
+def test_power_off_does_not_toggle_a_sleeping_tv():
+    """KEY_POWER is a toggle: sending it to a sleeping TV wakes it."""
+    client = _make_client(auth_method=AuthMethod.STATIC)
+    client._connected = True
+    sent = []
+    client._publish = lambda topic, payload="": sent.append(topic) or True
+    client._state = dict(CAPTURED_GOING_TO_SLEEP)
+    client._state_event.set()
+
+    assert client.power_off() is True
+    assert not any("sendkey" in t for t in sent)
+
+
+def test_power_on_wakes_a_sleeping_tv():
+    client = _make_client(auth_method=AuthMethod.STATIC)
+    client._connected = True
+    sent = []
+    client._publish = lambda topic, payload="": sent.append(topic) or True
+    client._state = dict(CAPTURED_GOING_TO_SLEEP)
+    client._state_event.set()
+
+    assert client.power_on() is True
+    assert any("sendkey" in t for t in sent)

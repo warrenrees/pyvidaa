@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.7] - 2026-08-04
+
+### Added
+
+- `python -m pyvidaa` runs the CLI straight from a source checkout, with no
+  install and no console script, so edits take effect on the next run.
+
+### Changed
+
+- The standby check is centralised in `is_sleeping()`, documented with what a
+  real TV actually sends. Behaviour is unchanged and deliberately so: `fake_sleep_0`
+  is matched **exactly**, because the trailing digit is a direction rather than a
+  sleep depth. Captured from hardware — pressing power sends `fake_sleep_0`
+  going into standby and `fake_sleep_1` coming out of it, immediately followed by
+  `remote_launcher`. Matching `fake_sleep*` as a prefix would report the TV off at
+  the very moment it is being switched on.
+
+### Notes from a live capture (`tv sniff`)
+
+- The TV **refuses wildcard subscriptions**, confirming the protocol notes. The
+  enumerated fallback is the only option.
+- Its state topic is **retained**, so a fresh subscribe immediately replays the
+  last state. That is helpful rather than harmful — the TV publishes every
+  change, so the retained value is current.
+- It announces standby as a `fake_sleep_0` state on the ordinary broadcast
+  topic and **never sends `tvsleep`**. That subscription stays as an accelerator
+  for models that do use it, but it is not the only route.
+- `hotelmodechange` and `bwsinputdata` produced nothing at all, so there is no
+  reason to subscribe to them.
+
 ## [2.2.6] - 2026-08-04
 
 ### Added

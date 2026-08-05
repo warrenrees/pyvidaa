@@ -66,6 +66,26 @@ from .topics import (
 )
 
 
+# The statetype a TV reports while in standby. The trailing digit is NOT a
+# sleep depth and must not be matched as a prefix - it is closer to a
+# direction. Captured from a real TV:
+#
+#   press power  -> {"statetype": "fake_sleep_0"}   going to standby
+#   press power  -> {"statetype": "fake_sleep_1"}   waking up, immediately
+#                   followed by {"statetype": "remote_launcher"}
+#
+# So fake_sleep_1 means the TV is coming ON. Treating "fake_sleep*" as asleep
+# would report it off at the exact moment it is being switched on.
+SLEEP_STATE = "fake_sleep_0"
+
+
+def is_sleeping(state: Optional[dict]) -> bool:
+    """Whether a state payload describes a TV that is asleep."""
+    if not state:
+        return False
+    return state.get("statetype") == SLEEP_STATE
+
+
 class VidaaTV:
     """Client to control Hisense TV via MQTT."""
 
@@ -702,10 +722,12 @@ class VidaaTV:
         # PIN dialog on screen. It carries an empty payload, so this has to be
         # handled before any JSON parsing - otherwise the one signal that
         # pairing actually started is silently dropped.
-        # The TV telling us it is going to standby. This is the only notice
-        # pre-dynamic firmware gives - it does not broadcast a fake_sleep_0
-        # state, it just stops answering - so synthesise one, which is what
-        # every consumer already understands as "off".
+        # The TV telling us it is going to standby, on the topic the
+        # bridge-based integrations key their OFF state off. Not every model
+        # uses it - one captured TV announces standby purely as a fake_sleep_0
+        # state on the broadcast topic and never sends this at all - so treat
+        # it as an accelerator, not the only route. Synthesising a sleep state
+        # keeps every existing consumer working unchanged.
         if msg.topic.endswith("/platform_service/actions/tvsleep"):
             _LOGGER.info("TV announced standby")
             self._state = {"statetype": "fake_sleep_0"}
@@ -1127,7 +1149,7 @@ class VidaaTV:
             True if TV is on, False if off or unreachable
         """
         state = self.get_state(timeout=timeout)
-        if state and state.get("statetype") == "fake_sleep_0":
+        if is_sleeping(state):
             return False
         return state is not None
 
@@ -1170,7 +1192,7 @@ class VidaaTV:
             True if command sent or TV already on
         """
         state = self.get_state(timeout=3.0)
-        if state and state.get("statetype") == "fake_sleep_0":
+        if is_sleeping(state):
             return self.send_key("KEY_POWER")
         elif state:
             _LOGGER.debug("TV is already on.")
@@ -1192,7 +1214,7 @@ class VidaaTV:
             be read, in which case nothing was sent.
         """
         state = self.get_state(timeout=3.0)
-        if state and state.get("statetype") != "fake_sleep_0":
+        if state and not is_sleeping(state):
             return self.send_key("KEY_POWER")
         elif state:
             _LOGGER.debug("TV is already off.")
