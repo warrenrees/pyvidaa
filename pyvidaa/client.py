@@ -184,6 +184,10 @@ class VidaaTV:
         # TV answered" from "the state happens to be unchanged" - a distinction
         # the payload alone cannot make.
         self._state_event = threading.Event()
+        # Consecutive gettvstate requests this TV has ignored. Some firmware
+        # only broadcasts state when it CHANGES and never answers the request,
+        # in which case waiting the full timeout every poll is pure waste.
+        self._state_unanswered = 0
         # Set once the access token has actually been received and saved, so
         # pairing can wait for persistence instead of returning on PIN-accept.
         self._token_event = threading.Event()
@@ -676,8 +680,11 @@ class VidaaTV:
         self._connected = False
         self._state_event.clear()
         # Everything we knew was learned before the TV went away, so do not let
-        # a reconnect resurrect a stale "on HDMI2".
+        # a reconnect resurrect a stale "on HDMI2". The same goes for what we
+        # learned about its manners: a reboot or a firmware update may change
+        # whether it answers.
         self._state = {}
+        self._state_unanswered = 0
         if rc == 0 or not was_connected:
             return
         # An unexpected drop. Log it: without this, a TV that accepts the
@@ -755,15 +762,24 @@ class VidaaTV:
                     self._cached_muted = (mute_val == 1)
                 self._last_response = payload
                 self._response_event.set()
-            # Handle broadcast state updates (don't trigger response event)
-            # A state answer, whether broadcast or addressed to us directly.
-            elif "broadcast" in msg.topic or msg.topic.endswith(
-                "/ui_service/data/state"
+            # A state answer, whether broadcast to everyone or addressed to us
+            # directly. Matched exactly: testing for "broadcast" anywhere in the
+            # topic meant ANY future broadcast subscription - hotelmodechange,
+            # bwsinputdata - would land here and overwrite the power state with
+            # an unrelated payload. With statetype then absent the TV reads as
+            # on, with its source and app silently cleared. Route new topics
+            # explicitly instead, as tvsleep and the auth push already are.
+            # Note this branch deliberately does NOT set _response_event.
+            elif msg.topic in (
+                TOPIC_STATE_RESPONSE,
+                get_topic(TOPIC_STATE_DIRECT, self.client_id),
             ):
                 self._state = payload
                 # Record that the TV answered, even if the payload is identical
                 # to the last one - that is what proves it is still alive.
                 self._state_event.set()
+                # It talks. Go back to waiting properly for its replies.
+                self._state_unanswered = 0
                 # Check if auth is required from state
                 if payload.get("statetype") == "authentication":
                     self._auth_required = True
@@ -1332,6 +1348,11 @@ class VidaaTV:
         return self._publish(topic, {"sourceid": source_id})
 
     # State
+    # Consecutive unanswered gettvstate requests before we stop waiting the full
+    # timeout for a reply, and how long to wait once we have.
+    _MAX_STATE_MISSES = 2
+    _SILENT_TV_PROBE = 0.3
+
     def get_state(self, timeout: float = 5.0) -> Optional[dict]:
         """Get TV state information.
 
@@ -1358,14 +1379,31 @@ class VidaaTV:
         topic = get_topic(TOPIC_GET_STATE, self.client_id)
         self._publish(topic, "")
 
-        if self._state_event.wait(timeout):
+        # Firmware that has never answered is not going to start mid-poll, and
+        # waiting the caller's full timeout for it is the single largest cost in
+        # a Home Assistant update cycle. Keep asking - it is one cheap message,
+        # and the answer is free if it ever comes - but stop paying for it.
+        wait = timeout
+        if self._state_unanswered >= self._MAX_STATE_MISSES:
+            wait = min(timeout, self._SILENT_TV_PROBE)
+
+        if self._state_event.wait(wait):
+            self._state_unanswered = 0
             return self._state
+
+        self._state_unanswered += 1
+        if self._state_unanswered == self._MAX_STATE_MISSES:
+            _LOGGER.debug(
+                "TV has not answered gettvstate %d times; it likely only "
+                "broadcasts state when it changes. Still asking, but no longer "
+                "waiting %ss for it.", self._state_unanswered, timeout,
+            )
 
         if self._state:
             _LOGGER.debug(
                 "TV did not answer gettvstate within %ss; reusing its last "
                 "known state (this firmware may only broadcast on change)",
-                timeout,
+                wait,
             )
             return self._state
 

@@ -630,6 +630,135 @@ def cmd_off(args):
         return 1
 
 
+# Every response topic we know of, including ones the client does not yet
+# subscribe to. Used as the fallback when the TV refuses a wildcard, so a
+# capture still shows whether these carry anything.
+def _sniff_topics(client_id: str) -> list:
+    """Candidate topics for a capture, broadcast first."""
+    return [
+        "/remoteapp/mobile/broadcast/ui_service/state",
+        "/remoteapp/mobile/broadcast/ui_service/volume",
+        "/remoteapp/mobile/broadcast/platform_service/actions/volumechange",
+        "/remoteapp/mobile/broadcast/platform_service/actions/tvsleep",
+        "/remoteapp/mobile/broadcast/ui_service/data/hotelmodechange",
+        "/remoteapp/mobile/broadcast/platform_service/actions/bwsinputdata",
+        f"/remoteapp/mobile/{client_id}/ui_service/data/state",
+        f"/remoteapp/mobile/{client_id}/ui_service/data/sourcelist",
+        f"/remoteapp/mobile/{client_id}/ui_service/data/applist",
+        f"/remoteapp/mobile/{client_id}/ui_service/data/authentication",
+        f"/remoteapp/mobile/{client_id}/ui_service/data/authenticationcode",
+        f"/remoteapp/mobile/{client_id}/ui_service/data/authenticationcodetoast",
+        f"/remoteapp/mobile/{client_id}/ui_service/data/authenticationcodeclose",
+        f"/remoteapp/mobile/{client_id}/ui_service/data/capability",
+        f"/remoteapp/mobile/{client_id}/ui_service/data/tokenissuance",
+        f"/remoteapp/mobile/{client_id}/platform_service/data/tokenissuance",
+        f"/remoteapp/mobile/{client_id}/platform_service/data/gettvinfo",
+        f"/remoteapp/mobile/{client_id}/platform_service/data/getdeviceinfo",
+        f"/remoteapp/mobile/{client_id}/platform_service/data/channellist",
+        f"/remoteapp/mobile/{client_id}/platform_service/data/getchannellistinfo",
+    ]
+
+
+def cmd_sniff(args):
+    """Capture everything the TV publishes, to find out what it really sends.
+
+    Answers questions no amount of reading the protocol notes can: does this TV
+    announce standby on tvsleep, is its state topic retained, which topic
+    carries the auth token, and which announces the PIN. Builds on
+    create_tv_client so static-auth TVs and saved pairings work unchanged.
+    """
+    import threading
+    from datetime import datetime
+
+    seconds = getattr(args, "seconds", 60)
+    out_path = getattr(args, "output", None)
+
+    tv = create_tv_client(
+        getattr(args, "tv", None), args.ip, getattr(args, "auth_mode", None)
+    )
+
+    lock = threading.Lock()
+    lines = []
+    subscribed = threading.Event()
+    granted = {}
+
+    def record(text):
+        with lock:
+            lines.append(text)
+        print(text, flush=True)
+
+    def on_message(client, userdata, msg):
+        stamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+        try:
+            payload = msg.payload.decode()
+        except UnicodeDecodeError:
+            payload = repr(msg.payload)
+        # retain matters: a retained state message replayed on resubscribe is
+        # the one way a stale "on" could survive everything else.
+        flag = " [RETAINED]" if msg.retain else ""
+        record(f"{stamp}  {msg.topic}{flag}\n            {payload or '<empty>'}")
+
+    def on_subscribe(client, userdata, mid, granted_qos):
+        granted[mid] = granted_qos
+        subscribed.set()
+
+    if not tv.connect(timeout=10):
+        print("Failed to connect to TV", file=sys.stderr)
+        return 1
+
+    client = tv._client
+    client.on_subscribe = on_subscribe
+    # A filter callback takes precedence over the client's own on_message, so
+    # this captures everything without the library also reacting to it.
+    client.message_callback_add("#", on_message)
+
+    # The protocol notes say wildcards are denied; the Mosquitto bridge setups
+    # that work against these TVs use exactly "/remoteapp/#". Settle it here
+    # rather than trusting either.
+    subscribed.clear()
+    result, mid = client.subscribe("/remoteapp/#")
+    wildcard_ok = False
+    if subscribed.wait(5):
+        codes = granted.get(mid) or []
+        wildcard_ok = bool(codes) and all(int(c) != 0x80 for c in codes)
+
+    if wildcard_ok:
+        record(f"# Wildcard /remoteapp/# ACCEPTED (granted qos {granted.get(mid)})")
+    else:
+        record("# Wildcard /remoteapp/# REFUSED; falling back to known topics")
+        for topic in _sniff_topics(tv.client_id):
+            client.subscribe(topic)
+            record(f"#   subscribed {topic}")
+
+    record(f"# Capturing for {seconds}s from {tv.host} as client_id {tv.client_id!r}")
+    record("# Switch the TV off and on during this window to catch both.")
+
+    try:
+        time.sleep(seconds)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        try:
+            client.message_callback_remove("#")
+        except Exception:
+            pass
+        tv.disconnect()
+
+    with lock:
+        captured = [x for x in lines if not x.startswith("#")]
+    print(f"\n# Captured {len(captured)} message(s)")
+    if not captured:
+        print("# Nothing at all - this TV pushes nothing unprompted while idle.")
+
+    if out_path:
+        with open(out_path, "w", encoding="utf-8") as fh:
+            with lock:
+                fh.write("\n".join(lines) + "\n")
+        print(f"# Written to {out_path}")
+
+    return 0
+
+
 def cmd_monitor(args):
     """Monitor MQTT messages from TV."""
     import signal
@@ -987,6 +1116,18 @@ def main():
     # Monitor MQTT messages
     p_monitor = subparsers.add_parser("monitor", help="Monitor MQTT messages from TV")
     p_monitor.set_defaults(func=cmd_monitor)
+
+    p_sniff = subparsers.add_parser(
+        "sniff",
+        help="Capture everything the TV publishes (for diagnosing a TV's quirks)",
+    )
+    p_sniff.add_argument(
+        "--seconds", "-s", type=int, default=60,
+        help="How long to capture for (default: 60). Switch the TV off and on "
+             "during this window to catch both transitions.",
+    )
+    p_sniff.add_argument("--output", "-o", help="Also write the capture to this file")
+    p_sniff.set_defaults(func=cmd_sniff)
 
     # Authentication management
     p_auth = subparsers.add_parser("auth", help="Manage TV authentication")

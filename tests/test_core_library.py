@@ -1087,3 +1087,88 @@ def test_delete_token_reports_whether_it_removed_anything(tmp_path):
     storage.save_token(device_id="10.0.0.50:36669", host="10.0.0.50", port=36669,
                        access_token="X")
     assert storage.delete_token(host="10.0.0.50", port=36669) is True
+
+
+# --- firmware that never answers gettvstate --------------------------------
+
+def test_a_tv_that_never_answers_stops_costing_the_full_timeout():
+    """Observed on real hardware: the TV answers getvolume in 8ms and never
+    answers gettvstate at all, because that firmware only broadcasts state when
+    it CHANGES. Waiting the full timeout every poll was the entire cost of a
+    Home Assistant update cycle - 3.01s, every 33s, forever.
+    """
+    import time as _time
+
+    client = _make_client(auth_method=AuthMethod.STATIC)
+    client._connected = True
+    client._publish = lambda topic, payload="": True
+
+    # It broadcast its state once, as such firmware does.
+    client._on_message(None, None, _state_msg(b'{"statetype": "app"}'))
+
+    # The first two polls still wait properly - it might just have been busy.
+    for _ in range(client._MAX_STATE_MISSES):
+        started = _time.monotonic()
+        assert client.get_state(timeout=1.0) == {"statetype": "app"}
+        assert _time.monotonic() - started >= 0.9
+
+    # Having learned, it stops paying, and still reports the same state.
+    started = _time.monotonic()
+    assert client.get_state(timeout=1.0) == {"statetype": "app"}
+    assert _time.monotonic() - started < 0.5
+
+
+def test_a_tv_that_starts_answering_is_waited_for_again():
+    """A change broadcast proves it talks, so go back to waiting properly."""
+    client = _make_client(auth_method=AuthMethod.STATIC)
+    client._connected = True
+    client._publish = lambda topic, payload="": True
+    client._on_message(None, None, _state_msg(b'{"statetype": "app"}'))
+
+    for _ in range(client._MAX_STATE_MISSES):
+        client.get_state(timeout=0.2)
+    assert client._state_unanswered >= client._MAX_STATE_MISSES
+
+    client._on_message(None, None, _state_msg(b'{"statetype": "sourceswitch"}'))
+
+    assert client._state_unanswered == 0
+
+
+def test_what_the_tv_learned_is_forgotten_on_disconnect():
+    """A reboot or firmware update may change whether it answers."""
+    client = _make_client(auth_method=AuthMethod.STATIC)
+    client._connected = True
+    client._publish = lambda topic, payload="": True
+    for _ in range(client._MAX_STATE_MISSES):
+        client.get_state(timeout=0.1)
+    assert client._state_unanswered > 0
+
+    client._on_disconnect(None, None, 16)
+
+    assert client._state_unanswered == 0
+
+
+# --- only real state topics may set the power state ------------------------
+
+@pytest.mark.parametrize(
+    "topic",
+    [
+        "/remoteapp/mobile/broadcast/ui_service/data/hotelmodechange",
+        "/remoteapp/mobile/broadcast/platform_service/actions/bwsinputdata",
+    ],
+)
+def test_an_unrelated_broadcast_cannot_become_the_tv_state(topic):
+    """Routing used to test for "broadcast" ANYWHERE in the topic, so any new
+    broadcast subscription would overwrite the power state with an unrelated
+    payload - and with statetype then absent the TV reads as on with its source
+    and app silently cleared. Guards the next topic somebody adds.
+    """
+    client = _make_client(auth_method=AuthMethod.STATIC)
+    client._on_message(None, None, _state_msg(b'{"statetype": "app", "name": "youtube"}'))
+
+    msg = MagicMock()
+    msg.topic = topic
+    msg.payload = b'{"hotelmode": 1}'
+    client._on_message(None, None, msg)
+
+    assert client._state == {"statetype": "app", "name": "youtube"}

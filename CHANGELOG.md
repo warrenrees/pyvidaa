@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.6] - 2026-08-04
+
+### Added
+
+- **`tv sniff`** — capture everything a TV publishes, to find out what it
+  really sends rather than what the notes claim. Tries `/remoteapp/#` first
+  (the protocol notes say wildcards are refused; the Mosquitto bridge setups
+  that work against these TVs use exactly that, so it is now tested rather than
+  assumed) and falls back to an enumerated list including topics the client
+  does not yet subscribe to. Logs the **retain** flag, which nothing in the
+  codebase previously inspected and which is the one way a stale "on" could
+  survive a resubscribe. `--seconds` and `--output` for sharing a capture.
+
+### Fixed
+
+- **A TV that never answers `gettvstate` no longer costs the full timeout on
+  every call.** Observed on real hardware: the TV replies to `getvolume` in 8ms
+  and never replies to `gettvstate` at all, because that firmware only
+  broadcasts state when it *changes*. After two unanswered requests the wait
+  drops to a short probe; the request is still sent, and any state message —
+  poll or change broadcast — restores the full wait immediately. Reported state
+  is unchanged. In Home Assistant this takes an update cycle from ~3.0s to
+  ~0.02s.
+- **Only genuine state topics can set the power state.** Routing tested for
+  `"broadcast"` anywhere in the topic, so any future broadcast subscription
+  (`hotelmodechange`, `bwsinputdata`) would have overwritten the TV state with
+  an unrelated payload — and with `statetype` then absent, the TV would read as
+  *on* with its source and app silently cleared. The two real state topics are
+  now matched exactly.
+
 ## [2.2.5] - 2026-08-04
 
 ### Fixed
