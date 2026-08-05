@@ -40,6 +40,16 @@ TOPIC_TOKEN_RESPONSE = "/remoteapp/mobile/{client}/platform_service/data/tokenis
 TOPIC_TV_INFO_RESPONSE = "/remoteapp/mobile/{client}/platform_service/data/gettvinfo"
 TOPIC_DEVICE_INFO_RESPONSE = "/remoteapp/mobile/{client}/platform_service/data/getdeviceinfo"
 TOPIC_CAPABILITY_RESPONSE = "/remoteapp/mobile/{client}/ui_service/data/capability"
+# The TV's acknowledgement of a vidaa_app_connect request: {"connect_result": 1}.
+# Confirmed by direct probe of a 32A35HUV (MTK9602, V0002.09.01O.P0814).
+# It means the request was ACCEPTED, not that a PIN is on screen: an already
+# authorized client gets the same reply with no dialog. The definitive
+# "PIN is showing" signal remains the push to .../ui_service/data/authentication.
+TOPIC_VIDAA_CONNECT_RESPONSE = "/remoteapp/mobile/{client}/ui_service/data/vidaa_app_connect"
+# Hotel mode changes, broadcast to every client: {"hotel_mode": "off"}. In hotel
+# mode the TV restricts source switching and app launches, so commands can be
+# accepted and then silently ignored.
+TOPIC_HOTEL_MODE = "/remoteapp/mobile/broadcast/ui_service/data/hotelmodechange"
 
 # Source IDs
 SOURCE_TV = "0"

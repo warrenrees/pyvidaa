@@ -39,6 +39,8 @@ from .topics import (
     TOPIC_AUTH_CLOSE,
     TOPIC_GET_TOKEN,
     TOPIC_VIDAA_CONNECT,
+    TOPIC_VIDAA_CONNECT_RESPONSE,
+    TOPIC_HOTEL_MODE,
     TOPIC_GET_APPS,
     TOPIC_GET_SOURCES,
     TOPIC_GET_STATE,
@@ -156,6 +158,9 @@ class VidaaTV:
         self.enable_persistence = enable_persistence
         self.on_state_change = on_state_change
         self.on_auth_required = on_auth_required
+        # Assign after construction if you care about hotel mode; adding it to
+        # the constructor would change the signature for every caller.
+        self.on_hotel_mode_change: Optional[Callable[[Optional[str]], None]] = None
         self.mac_address = mac_address
         self.use_dynamic_auth = use_dynamic_auth
         self.brand = brand
@@ -200,6 +205,14 @@ class VidaaTV:
         # Set when the TV confirms the PIN dialog is on screen, so pairing can
         # wait for that instead of assuming it worked.
         self._pin_event = threading.Event()
+        # Set when the TV acknowledges vidaa_app_connect. Weaker than
+        # _pin_event: it means the request was accepted, not that a PIN is
+        # showing. Firmware that never sends the authentication push has this
+        # as the only evidence pairing was even received.
+        self._connect_ack_event = threading.Event()
+        # Last hotel_mode the TV broadcast, or None if it never has. In hotel
+        # mode source switching and app launches can be silently ignored.
+        self._hotel_mode: Optional[str] = None
         # Set whenever a state broadcast arrives, so get_state() can tell "the
         # TV answered" from "the state happens to be unchanged" - a distinction
         # the payload alone cannot make.
@@ -654,6 +667,14 @@ class VidaaTV:
             self._client.subscribe(get_topic(TOPIC_DEVICE_INFO_RESPONSE, self.client_id))
             self._client.subscribe(get_topic(TOPIC_CAPABILITY_RESPONSE, self.client_id))
 
+            # The TV's reply to vidaa_app_connect, and hotel mode changes. Both
+            # are routed explicitly in _on_message - see the warning on the
+            # state branch about broadcasts falling through to it.
+            self._client.subscribe(
+                get_topic(TOPIC_VIDAA_CONNECT_RESPONSE, self.client_id)
+            )
+            self._client.subscribe(TOPIC_HOTEL_MODE)
+
             # If we have a saved token, we're already authenticated
             if self._access_token:
                 self._authenticated = True
@@ -744,6 +765,34 @@ class VidaaTV:
                 self.on_auth_required()
             if not msg.payload:
                 return
+
+        # Hotel mode is a broadcast, so it MUST be handled before anything that
+        # keys off the topic being a broadcast, and must not fall through to the
+        # generic branch - that would set _response_event and unblock whichever
+        # unrelated command happened to be waiting.
+        if msg.topic == TOPIC_HOTEL_MODE:
+            try:
+                mode = json.loads(msg.payload.decode()).get("hotel_mode")
+            except (json.JSONDecodeError, AttributeError):
+                mode = None
+            self._hotel_mode = mode
+            _LOGGER.info("TV reported hotel mode: %s", mode)
+            if self.on_hotel_mode_change:
+                self.on_hotel_mode_change(mode)
+            return
+
+        # The TV acknowledging vidaa_app_connect. This confirms the request was
+        # accepted, which is NOT the same as a PIN being on screen - an already
+        # authorized client gets connect_result 1 with no dialog. Tracked
+        # separately from _pin_event so start_pairing can tell them apart.
+        if msg.topic.endswith("/ui_service/data/vidaa_app_connect"):
+            try:
+                result = json.loads(msg.payload.decode()).get("connect_result")
+            except (json.JSONDecodeError, AttributeError):
+                result = None
+            _LOGGER.debug("TV acknowledged vidaa_app_connect: %s", result)
+            self._connect_ack_event.set()
+            return
 
         try:
             payload = json.loads(msg.payload.decode())
@@ -1078,7 +1127,12 @@ class VidaaTV:
         self._client.subscribe(get_topic(TOPIC_AUTH_CODE_RESPONSE, self.client_id))
         self._client.subscribe(get_topic(TOPIC_TOKEN_RESPONSE, self.client_id))
 
+        self._client.subscribe(
+            get_topic(TOPIC_VIDAA_CONNECT_RESPONSE, self.client_id)
+        )
+
         self._pin_event.clear()
+        self._connect_ack_event.clear()
 
         if self._is_tokenless_auth():
             # Pre-dynamic firmware has no vidaa_app_connect action. It shows the
@@ -1100,12 +1154,35 @@ class VidaaTV:
         if self._pin_event.wait(wait_for_pin):
             return True
 
+        # No authentication push. Some firmware acknowledges vidaa_app_connect
+        # and shows the PIN without ever sending one, so treating the missing
+        # push as failure reported "pairing did not start" at TVs with a PIN
+        # plainly on screen. The acknowledgement is weaker evidence - it also
+        # arrives when the client is already authorized and no dialog appears -
+        # so say which signal was actually seen rather than implying certainty.
+        if self._connect_ack_event.is_set():
+            _LOGGER.info(
+                "TV accepted the pairing request but sent no PIN notification. "
+                "Enter the PIN if one is on screen; if client_id %r is already "
+                "authorized, none will be shown.", self.client_id,
+            )
+            return True
+
         _LOGGER.warning(
             "TV did not confirm the PIN dialog within %ss. It may already have "
             "authorized client_id %r (in which case no PIN is shown), or the "
             "screen is off.", wait_for_pin, self.client_id,
         )
         return False
+
+    def get_hotel_mode(self) -> Optional[str]:
+        """Last hotel mode the TV broadcast, e.g. "off".
+
+        None means the TV has not broadcast one since connecting, which is the
+        normal case - it only announces hotel mode when it changes. Absence is
+        not evidence that hotel mode is off.
+        """
+        return self._hotel_mode
 
     def is_authenticated(self) -> bool:
         """Check if currently authenticated with the TV."""

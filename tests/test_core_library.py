@@ -935,6 +935,68 @@ def test_client_subscribes_to_the_direct_state_topic():
     assert f"/remoteapp/mobile/{DEFAULT_CLIENT_ID}/ui_service/data/state" in subscribed
 
 
+def test_hotel_mode_broadcast_does_not_disturb_state_or_waiters():
+    """The hazard that comes with subscribing to any new broadcast.
+
+    Both new topics must be routed explicitly. Falling through to the state
+    branch would overwrite the power state with a payload that has no
+    statetype, reading as ON with source and app silently cleared; falling
+    through to the generic branch would set _response_event and unblock
+    whichever unrelated command happened to be waiting for its reply.
+    """
+    client = _make_client(auth_method=AuthMethod.STATIC)
+    client._connected = True
+    client._on_message(None, None, _state_msg(b'{"statetype": "fake_sleep_0"}'))
+    client._response_event.clear()
+
+    msg = MagicMock()
+    msg.topic = "/remoteapp/mobile/broadcast/ui_service/data/hotelmodechange"
+    msg.payload = b'{"hotel_mode":"off"}'
+    client._on_message(None, None, msg)
+
+    assert client._state == {"statetype": "fake_sleep_0"}
+    assert not client._response_event.is_set()
+    assert client.get_hotel_mode() == "off"
+
+
+def test_vidaa_app_connect_ack_is_tracked_apart_from_the_pin_signal():
+    """connect_result 1 means the request was accepted, NOT that a PIN shows.
+
+    A TV that has already authorized the client answers with exactly this and
+    displays nothing, so conflating it with the authentication push would make
+    start_pairing claim a PIN is on screen when none is.
+    """
+    client = _make_client(auth_method=AuthMethod.STATIC)
+    client._connected = True
+    client._response_event.clear()
+
+    msg = MagicMock()
+    msg.topic = (
+        f"/remoteapp/mobile/{DEFAULT_CLIENT_ID}/ui_service/data/vidaa_app_connect"
+    )
+    msg.payload = b'{"connect_result":1}'
+    client._on_message(None, None, msg)
+
+    assert client._connect_ack_event.is_set()
+    assert not client._pin_event.is_set()
+    assert not client._auth_required
+    assert not client._response_event.is_set()
+
+
+def test_client_subscribes_to_the_new_topics():
+    client = _make_client(auth_method=AuthMethod.STATIC)
+    client._client = MagicMock()
+
+    client._on_connect(None, None, {}, 0)
+
+    subscribed = {call.args[0] for call in client._client.subscribe.call_args_list}
+    assert "/remoteapp/mobile/broadcast/ui_service/data/hotelmodechange" in subscribed
+    assert (
+        f"/remoteapp/mobile/{DEFAULT_CLIENT_ID}/ui_service/data/vidaa_app_connect"
+        in subscribed
+    )
+
+
 def test_get_state_returns_promptly_when_the_state_is_unchanged():
     """An idle TV reports the same payload every time; that is still a reply.
 

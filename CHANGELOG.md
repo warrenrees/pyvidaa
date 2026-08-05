@@ -22,18 +22,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `remote_launcher`. Matching `fake_sleep*` as a prefix would report the TV off at
   the very moment it is being switched on.
 
+### Added
+
+- **The TV's reply to `vidaa_app_connect` is now subscribed to.** The library
+  published that action to start pairing but never listened for the answer, so
+  the acknowledgement was thrown away. `start_pairing(wait_for_pin=…)` now
+  accepts it as a fallback: firmware that shows the PIN without ever pushing to
+  `.../ui_service/data/authentication` used to be reported as "pairing did not
+  start" with a PIN plainly on screen. The acknowledgement is deliberately kept
+  distinct from the PIN signal and logged differently, because it also arrives
+  when the client is already authorized and no dialog appears.
+- **`hotelmodechange` is now subscribed to**, exposed via `get_hotel_mode()` and
+  the assignable `on_hotel_mode_change` callback. In hotel mode the TV restricts
+  source switching and app launches, so commands can be accepted and then
+  silently ignored.
+
 ### Notes from a live capture (`tv sniff`)
 
-- The TV **refuses wildcard subscriptions**, confirming the protocol notes. The
-  enumerated fallback is the only option.
 - Its state topic is **retained**, so a fresh subscribe immediately replays the
   last state. That is helpful rather than harmful — the TV publishes every
   change, so the retained value is current.
 - It announces standby as a `fake_sleep_0` state on the ordinary broadcast
   topic and **never sends `tvsleep`**. That subscription stays as an accelerator
   for models that do use it, but it is not the only route.
-- `hotelmodechange` and `bwsinputdata` produced nothing at all, so there is no
-  reason to subscribe to them.
+
+### Corrections to the previous notes
+
+Both of these were wrong, and both were wrong in the same way — a negative
+result from a test that could not have produced a positive one.
+
+- **Wildcard subscriptions are accepted, and deliver.** `/remoteapp/#` was
+  re-tested directly: the TV grants it and publishes through it. The earlier
+  "refuses wildcards" note, and the protocol notes it claimed to confirm, are
+  wrong for this firmware. This matters beyond tidiness — a wildcard makes the
+  whole topic surface observable at once, without guessing names.
+- **`hotelmodechange` is real.** It was recorded as producing nothing, but the
+  capture that concluded that was only subscribed to a list of guessed topics.
+  With a wildcard listener the TV emits
+  `/remoteapp/mobile/broadcast/ui_service/data/hotelmodechange` with
+  `{"hotel_mode":"off"}`. `bwsinputdata` remains unobserved.
 
 ## [2.2.6] - 2026-08-04
 
