@@ -882,26 +882,57 @@ def _state_msg(payload: bytes):
     return msg
 
 
-def test_get_state_returns_none_when_the_tv_goes_silent():
-    """A TV switched off stops answering while the socket stays open.
+def test_get_state_returns_none_when_the_tv_has_never_reported():
+    """With nothing cached there is genuinely nothing to report."""
+    client = _make_client(auth_method=AuthMethod.STATIC)
+    client._connected = True
+    client._publish = lambda topic, payload="": True
 
-    Regression: get_state() waited for the payload to CHANGE and returned the
-    last known state on timeout, so Home Assistant kept reporting the TV as on
-    for ~2 minutes after it was switched off - until the MQTT keepalive finally
-    noticed. Returning None is what lets a caller tell "gone" from "unchanged".
+    assert client.get_state(timeout=0.3) is None
+
+
+def test_a_silent_poll_is_inconclusive_not_proof_the_tv_is_off():
+    """Firmware varies: some models only broadcast state when it CHANGES.
+
+    Regression guard in both directions. Treating a silent poll as "the TV is
+    gone" made an idle TV on such firmware report itself off one poll after
+    being switched ON. Absence of a reply is not evidence of absence - losing
+    the connection and the tvsleep announcement are, and both are handled
+    elsewhere.
     """
     client = _make_client(auth_method=AuthMethod.STATIC)
     client._connected = True
     client._publish = lambda topic, payload="": True
 
-    # The TV had answered earlier, so a stale state is cached.
     client._on_message(None, None, _state_msg(b'{"statetype": "sourceswitch"}'))
-    assert client._state == {"statetype": "sourceswitch"}
 
-    # Now it answers nothing at all.
-    assert client.get_state(timeout=0.3) is None
-    # ...and the cache is left intact for anything that wants the last value.
-    assert client._state == {"statetype": "sourceswitch"}
+    assert client.get_state(timeout=0.3) == {"statetype": "sourceswitch"}
+
+
+def test_a_state_answer_addressed_to_this_client_counts():
+    """Some firmware answers gettvstate to the asking client rather than
+    re-broadcasting it, and that topic was not even subscribed to."""
+    client = _make_client(auth_method=AuthMethod.STATIC)
+    client._connected = True
+
+    msg = MagicMock()
+    msg.topic = f"/remoteapp/mobile/{DEFAULT_CLIENT_ID}/ui_service/data/state"
+    msg.payload = b'{"statetype": "remote_launcher"}'
+
+    client._on_message(None, None, msg)
+
+    assert client._state == {"statetype": "remote_launcher"}
+    assert client._state_event.is_set()
+
+
+def test_client_subscribes_to_the_direct_state_topic():
+    client = _make_client(auth_method=AuthMethod.STATIC)
+    client._client = MagicMock()
+
+    client._on_connect(None, None, {}, 0)
+
+    subscribed = {call.args[0] for call in client._client.subscribe.call_args_list}
+    assert f"/remoteapp/mobile/{DEFAULT_CLIENT_ID}/ui_service/data/state" in subscribed
 
 
 def test_get_state_returns_promptly_when_the_state_is_unchanged():

@@ -52,6 +52,7 @@ from .topics import (
     TOPIC_SET_VOLUME,
     TOPIC_APPS_RESPONSE,
     TOPIC_SOURCES_RESPONSE,
+    TOPIC_STATE_DIRECT,
     TOPIC_STATE_RESPONSE,
     TOPIC_TV_SLEEP,
     TOPIC_VOLUME_RESPONSE,
@@ -606,6 +607,10 @@ class VidaaTV:
             _LOGGER.info("Connected to TV at %s:%s", self.host, self.port)
             # Subscribe to response topics
             self._client.subscribe(TOPIC_STATE_RESPONSE)
+            # Some firmware answers gettvstate to the asking client rather than
+            # re-broadcasting it, in which case this is the only place the
+            # answer appears.
+            self._client.subscribe(get_topic(TOPIC_STATE_DIRECT, self.client_id))
             # The TV's standby announcement. Without this the only evidence it
             # has gone is that it stops answering, which takes a poll to notice.
             self._client.subscribe(TOPIC_TV_SLEEP)
@@ -751,7 +756,10 @@ class VidaaTV:
                 self._last_response = payload
                 self._response_event.set()
             # Handle broadcast state updates (don't trigger response event)
-            elif "broadcast" in msg.topic:
+            # A state answer, whether broadcast or addressed to us directly.
+            elif "broadcast" in msg.topic or msg.topic.endswith(
+                "/ui_service/data/state"
+            ):
                 self._state = payload
                 # Record that the TV answered, even if the payload is identical
                 # to the last one - that is what proves it is still alive.
@@ -1331,15 +1339,18 @@ class VidaaTV:
         waits for the TV to answer.
 
         Returns:
-            The current state, or None if the TV did not answer within the
-            timeout.
+            The current state, or None if nothing is known about it.
 
-            None means "no response", which is NOT the same as an empty state:
-            it is how a caller learns the TV has gone away. This used to wait
-            for the payload to *change* and return the last known state on
-            timeout, so a TV that had been switched off kept reporting whatever
-            it was last doing - and an idle TV, whose state is identical every
-            time, cost the full timeout on every single call.
+            A fresh answer returns immediately. Firmware varies in whether it
+            answers gettvstate at all - some models only broadcast state when
+            it CHANGES - so a silent timeout is treated as "unchanged" and the
+            last known state is returned, exactly as before. Absence of a reply
+            is not evidence the TV is gone: loss of the connection and the
+            tvsleep announcement are, and both are handled elsewhere.
+
+            This used to wait for the payload to *change*, which meant an idle
+            TV cost the full timeout on every single call even while answering
+            promptly.
         """
         self._state_event.clear()
 
@@ -1350,10 +1361,15 @@ class VidaaTV:
         if self._state_event.wait(timeout):
             return self._state
 
-        _LOGGER.debug(
-            "TV did not answer gettvstate within %ss; treating it as unreachable",
-            timeout,
-        )
+        if self._state:
+            _LOGGER.debug(
+                "TV did not answer gettvstate within %ss; reusing its last "
+                "known state (this firmware may only broadcast on change)",
+                timeout,
+            )
+            return self._state
+
+        _LOGGER.debug("TV has not reported any state yet")
         return None
 
     # Device Info

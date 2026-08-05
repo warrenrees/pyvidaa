@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.5] - 2026-08-04
+
+### Fixed
+
+- **A TV that does not answer `gettvstate` was reported as off.** 2.2.4 treated
+  a silent poll as proof the TV had gone away, but firmware varies: some models
+  only broadcast their state when it *changes*, and never reply to the request.
+  On those, an idle TV switched itself off in Home Assistant one poll after
+  being switched on. A silent poll is now treated as "unchanged" and the last
+  known state is returned, as before. Absence of a reply is not evidence of
+  absence — losing the connection and the `tvsleep` announcement are, and both
+  are handled on their own.
+- Subscribed to `/remoteapp/mobile/{client}/ui_service/data/state`, where some
+  firmware answers `gettvstate` instead of re-broadcasting it. That topic was
+  never subscribed to, so such a reply was not merely mishandled — it never
+  arrived at all.
+
 ## [2.2.4] - 2026-08-04
 
 ### Fixed

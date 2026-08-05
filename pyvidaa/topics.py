@@ -28,6 +28,9 @@ TOPIC_STATE_RESPONSE = "/remoteapp/mobile/broadcast/ui_service/state"
 # own remote. Pre-dynamic firmware sends nothing else to say it is going away:
 # it does not broadcast a fake_sleep_0 state, it simply stops answering.
 TOPIC_TV_SLEEP = "/remoteapp/mobile/broadcast/platform_service/actions/tvsleep"
+# Some firmware answers gettvstate here, addressed to the asking client,
+# instead of (or as well as) re-broadcasting it.
+TOPIC_STATE_DIRECT = "/remoteapp/mobile/{client}/ui_service/data/state"
 TOPIC_VOLUME_RESPONSE = "/remoteapp/mobile/broadcast/ui_service/volume"
 TOPIC_SOURCES_RESPONSE = "/remoteapp/mobile/{client}/ui_service/data/sourcelist"
 TOPIC_APPS_RESPONSE = "/remoteapp/mobile/{client}/ui_service/data/applist"
