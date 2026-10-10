@@ -342,6 +342,11 @@ New devices must be paired with the TV before commands will work. Pairing involv
 ## Source Control
 
 ### Source IDs
+These numeric IDs are used by some TVs, but they are not universal. One TV
+reports `"sourceid": "HDMI2"` in its `sourceswitch` state and ignores a
+`changesource` command with the legacy ID `"4"`. Use the IDs returned by that
+TV's `sourcelist` response when available.
+
 | ID | Source |
 |----|--------|
 | 0 | TV |

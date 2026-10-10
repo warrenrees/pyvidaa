@@ -346,6 +346,74 @@ def _make_client(auth_method=AuthMethod.MODERN, **kwargs):
     )
 
 
+# --- source IDs vary between TV models -----------------------------------
+
+def test_set_source_uses_tv_reported_string_id():
+    """Some TVs advertise HDMI2 as the literal source ID HDMI2, not 4."""
+    client = _make_client()
+    client._request = MagicMock(return_value=[
+        {"sourceid": "HDMI2", "sourcename": "HDMI2"},
+    ])
+    client._publish = MagicMock(return_value=True)
+
+    assert client.set_source("HDMI2") is True
+
+    client._request.assert_called_once()
+    assert client._publish.call_args.args[1] == {"sourceid": "HDMI2"}
+
+
+def test_set_source_uses_reported_id_for_name_and_display_name():
+    """A TV's source list supplies the ID for each of its source labels."""
+    client = _make_client()
+    client._request = MagicMock(return_value=[
+        {"sourceid": 4, "sourcename": "HDMI2", "displayname": "Game console"},
+    ])
+    client._publish = MagicMock(return_value=True)
+
+    client.get_sources()
+    assert client.set_source("HDMI2") is True
+    assert client.set_source("game console") is True
+
+    assert client._request.call_count == 1
+    assert [call.args[1] for call in client._publish.call_args_list] == [
+        {"sourceid": "4"},
+        {"sourceid": "4"},
+    ]
+
+
+def test_set_source_falls_back_to_legacy_id_without_source_list():
+    """Older TVs still use the fixed HDMI mapping if they do not answer."""
+    client = _make_client()
+    client._request = MagicMock(return_value=None)
+    client._publish = MagicMock(return_value=True)
+
+    assert client.set_source("HDMI2") is True
+
+    assert client._publish.call_args.args[1] == {"sourceid": "4"}
+
+
+def test_set_source_waits_before_retrying_unanswered_source_list():
+    """A TV that ignores sourcelist must not delay every input change."""
+    client = _make_client()
+    client._request = MagicMock(return_value=None)
+    client._publish = MagicMock(return_value=True)
+
+    with patch("pyvidaa.client.time.monotonic", return_value=100.0):
+        assert client.set_source("HDMI2") is True
+    with patch("pyvidaa.client.time.monotonic", return_value=110.0):
+        assert client.set_source("HDMI1") is True
+    assert client._request.call_count == 1
+
+    with patch("pyvidaa.client.time.monotonic", return_value=161.0):
+        assert client.set_source("HDMI3") is True
+    assert client._request.call_count == 2
+    assert [call.args[1] for call in client._publish.call_args_list] == [
+        {"sourceid": "4"},
+        {"sourceid": "3"},
+        {"sourceid": "5"},
+    ]
+
+
 @pytest.mark.parametrize("raw", [b'"0509"', b"42", b"true", b'"some string"'])
 def test_on_message_tolerates_non_dict_payload(raw):
     """The TV sometimes publishes bare JSON scalars on the auth topic.

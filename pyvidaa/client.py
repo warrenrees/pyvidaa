@@ -10,7 +10,7 @@ import ssl
 import threading
 import time
 import uuid
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Dict, Optional
 
 import paho.mqtt.client as mqtt
 
@@ -90,6 +90,8 @@ def is_sleeping(state: Optional[dict]) -> bool:
 
 class VidaaTV:
     """Client to control Hisense TV via MQTT."""
+
+    _SOURCE_RETRY_INTERVAL_SECONDS = 60.0
 
     def __init__(
         self,
@@ -228,6 +230,8 @@ class VidaaTV:
         self._state: dict = {}
         self._cached_volume: Optional[int] = None  # Cache volume from broadcasts
         self._cached_muted: bool = False  # Cache mute status from broadcasts
+        self._source_ids: Dict[str, str] = {}
+        self._source_ids_last_requested_at: Optional[float] = None
 
         # Track if we need to refresh token after connecting
         self._pending_token_refresh = False
@@ -1426,7 +1430,20 @@ class VidaaTV:
             List of source dicts or None if failed
         """
         topic = get_topic(TOPIC_GET_SOURCES, self.client_id)
-        return self._request(topic, timeout=timeout)
+        self._source_ids_last_requested_at = time.monotonic()
+        sources = self._request(topic, timeout=timeout)
+        if isinstance(sources, list):
+            source_ids = {}
+            for entry in sources:
+                if not isinstance(entry, dict) or entry.get("sourceid") is None:
+                    continue
+                source_id = str(entry["sourceid"])
+                for field in ("sourceid", "sourcename", "displayname", "name"):
+                    name = entry.get(field)
+                    if name is not None:
+                        source_ids[str(name).strip().lower()] = source_id
+            self._source_ids = source_ids
+        return sources
 
     def set_source(self, source: str, check_state: bool = False) -> bool:
         """Set input source.
@@ -1442,7 +1459,23 @@ class VidaaTV:
             print("TV is off. Command not sent.")
             return False
 
-        source_id = SOURCE_MAP.get(source.lower(), source)
+        source_name = source.strip().lower()
+        # Source IDs vary by TV: some use "4" for HDMI2, others use "HDMI2".
+        # Prefer the ID advertised by this TV, but keep the legacy mapping if
+        # its source list is unavailable.
+        if (
+            not self._source_ids
+            and not source_name.isdecimal()
+            and (
+                self._source_ids_last_requested_at is None
+                or time.monotonic() - self._source_ids_last_requested_at
+                >= self._SOURCE_RETRY_INTERVAL_SECONDS
+            )
+        ):
+            self.get_sources()
+        source_id = self._source_ids.get(
+            source_name, SOURCE_MAP.get(source_name, source)
+        )
         topic = get_topic(TOPIC_SET_SOURCE, self.client_id)
         return self._publish(topic, {"sourceid": source_id})
 
