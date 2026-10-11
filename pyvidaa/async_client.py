@@ -8,6 +8,7 @@ For Home Assistant integration, use AsyncVidaaTV with hass.async_add_executor_jo
 
 import asyncio
 import logging
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from typing import Any, Callable, Optional, List
@@ -105,6 +106,9 @@ class AsyncVidaaTV:
         """
         self._executor = executor or _get_executor()
         self._loop = loop
+        self._operation_lock = asyncio.Lock()
+        self._thread_lock = threading.RLock()
+        self._closed = False
 
         # Store init params for lazy client creation
         # Client is NOT created here to avoid blocking SSL calls in event loop
@@ -148,16 +152,19 @@ class AsyncVidaaTV:
         This must be called from within an executor thread, not the event loop,
         because VidaaTV.__init__ performs blocking SSL operations.
         """
-        if self._client is None:
-            self._client = VidaaTV(**self._init_kwargs)
-        return self._client
+        with self._thread_lock:
+            if self._closed:
+                raise RuntimeError("VIDAA client has been closed")
+            if self._client is None:
+                self._client = VidaaTV(**self._init_kwargs)
+            return self._client
 
     async def _async_ensure_client(self) -> None:
         """Ensure client is created, running in executor to avoid blocking."""
         if self._client is None:
             await self._run_in_executor(self._ensure_client)
 
-    async def _run_in_executor(self, func: Callable, *args, **kwargs) -> Any:
+    async def _run_in_executor(self, func: Callable, *args, _allow_closed=False, **kwargs) -> Any:
         """Run a sync function in the executor.
 
         Args:
@@ -168,10 +175,59 @@ class AsyncVidaaTV:
         Returns:
             Function result
         """
-        loop = self._get_loop()
-        if kwargs:
-            func = partial(func, **kwargs)
-        return await loop.run_in_executor(self._executor, func, *args)
+        async with self._operation_lock:
+            future = self._get_loop().run_in_executor(
+                self._executor,
+                partial(self._run_sync, func, *args, _allow_closed=_allow_closed, **kwargs),
+            )
+            try:
+                return await asyncio.shield(future)
+            except asyncio.CancelledError:
+                # Cancelling an await does not stop its executor thread. Keep
+                # ownership until that thread finishes, including repeated
+                # cancellation, so reset/unload cannot race a pending connect.
+                while not future.done():
+                    try:
+                        await asyncio.shield(future)
+                    except asyncio.CancelledError:
+                        continue
+                    except Exception:
+                        break
+                if not future.cancelled():
+                    future.exception()  # Retrieve a failure from the drained job.
+                raise
+
+    def _run_sync(self, func, *args, _allow_closed=False, **kwargs):
+        with self._thread_lock:
+            if self._closed and not _allow_closed:
+                raise RuntimeError("VIDAA client has been closed")
+            return func(*args, **kwargs)
+
+    def _disconnect_sync(self):
+        if self._client is not None:
+            self._client.disconnect()
+
+    async def async_close(self) -> None:
+        """Permanently close this owner; reject queued and future operations."""
+        self._closed = True
+        # Capture the client inside the serialized job, not before a queued
+        # constructor has finished. Shield/drain also makes close cancel-safe.
+        task = asyncio.create_task(
+            self._run_in_executor(self._disconnect_sync, _allow_closed=True)
+        )
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            while not task.done():
+                try:
+                    await asyncio.shield(task)
+                except asyncio.CancelledError:
+                    continue
+                except Exception:
+                    break
+            if not task.cancelled():
+                task.exception()
+            raise
 
     async def _call(self, method_name: str, *args, **kwargs) -> Any:
         """Call a sync client method in the executor, building the client if needed.
@@ -263,8 +319,7 @@ class AsyncVidaaTV:
 
     async def async_disconnect(self) -> None:
         """Disconnect from the TV asynchronously."""
-        if self._client:
-            await self._run_in_executor(self._client.disconnect)
+        await self._run_in_executor(self._disconnect_sync, _allow_closed=True)
 
     # Authentication
     async def async_start_pairing(self, wait_for_pin: float = 0.0) -> bool:
@@ -301,8 +356,8 @@ class AsyncVidaaTV:
         """
         if not self._client:
             return False
-        return await self._run_in_executor(
-            self._client.authenticate,
+        return await self._call(
+            "authenticate",
             pin,
             wait_for_response=wait_for_response,
             timeout=timeout,
@@ -316,8 +371,8 @@ class AsyncVidaaTV:
         """
         if not self._client:
             return False
-        return await self._run_in_executor(
-            self._client.refresh_token,
+        return await self._call(
+            "refresh_token",
             timeout=timeout,
         )
 
@@ -330,10 +385,7 @@ class AsyncVidaaTV:
         """
         def _reset():
             if self._client is not None:
-                try:
-                    self._client.disconnect()
-                except Exception:
-                    pass
+                self._client.disconnect()
                 self._client = None
 
         await self._run_in_executor(_reset)
@@ -571,45 +623,44 @@ class AsyncVidaaTV:
 
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
         """Async context manager exit."""
-        await self.async_disconnect()
+        await self.async_close()
 
     # Sync method aliases (for backwards compatibility or when blocking is OK)
     def connect(self, *args, **kwargs) -> bool:
         """Sync connect (blocking)."""
-        return self._ensure_client().connect(*args, **kwargs)
+        return self._run_sync(lambda: self._ensure_client().connect(*args, **kwargs))
 
     def disconnect(self) -> None:
         """Sync disconnect (blocking)."""
-        if self._client:
-            return self._client.disconnect()
+        return self._run_sync(self._disconnect_sync, _allow_closed=True)
 
     def send_key(self, *args, **kwargs) -> bool:
         """Sync send_key (blocking)."""
-        return self._ensure_client().send_key(*args, **kwargs)
+        return self._run_sync(lambda: self._ensure_client().send_key(*args, **kwargs))
 
     def power(self) -> bool:
         """Sync power toggle (blocking)."""
-        return self._ensure_client().power()
+        return self._run_sync(lambda: self._ensure_client().power())
 
     def get_volume(self, *args, **kwargs) -> Optional[int]:
         """Sync get_volume (blocking)."""
-        return self._ensure_client().get_volume(*args, **kwargs)
+        return self._run_sync(lambda: self._ensure_client().get_volume(*args, **kwargs))
 
     def set_volume(self, *args, **kwargs) -> bool:
         """Sync set_volume (blocking)."""
-        return self._ensure_client().set_volume(*args, **kwargs)
+        return self._run_sync(lambda: self._ensure_client().set_volume(*args, **kwargs))
 
     def get_state(self, *args, **kwargs) -> Optional[dict]:
         """Sync get_state (blocking)."""
-        return self._ensure_client().get_state(*args, **kwargs)
+        return self._run_sync(lambda: self._ensure_client().get_state(*args, **kwargs))
 
     def get_apps(self, *args, **kwargs) -> Optional[List[dict]]:
         """Sync get_apps (blocking)."""
-        return self._ensure_client().get_apps(*args, **kwargs)
+        return self._run_sync(lambda: self._ensure_client().get_apps(*args, **kwargs))
 
     def launch_app(self, *args, **kwargs) -> bool:
         """Sync launch_app (blocking)."""
-        return self._ensure_client().launch_app(*args, **kwargs)
+        return self._run_sync(lambda: self._ensure_client().launch_app(*args, **kwargs))
 
 
 # Async discovery functions

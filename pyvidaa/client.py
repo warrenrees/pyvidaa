@@ -10,6 +10,7 @@ import ssl
 import threading
 import time
 import uuid
+from functools import wraps
 from typing import Any, Callable, Optional
 
 import paho.mqtt.client as mqtt
@@ -86,6 +87,23 @@ def is_sleeping(state: Optional[dict]) -> bool:
     if not state:
         return False
     return state.get("statetype") == SLEEP_STATE
+
+
+def _serialized(method):
+    """Serialize blocking operations, never MQTT callbacks."""
+    @wraps(method)
+    def wrapped(self, *args, **kwargs):
+        with self._operation_lock:
+            return method(self, *args, **kwargs)
+    return wrapped
+
+
+class AppListTimeoutError(RuntimeError):
+    """The connected TV did not return its application list."""
+
+
+class AppNotFoundError(ValueError):
+    """The requested app is absent from the TV's returned list."""
 
 
 class VidaaTV:
@@ -176,18 +194,6 @@ class VidaaTV:
         self._auto_detect_protocol = auto_detect_protocol
         self._allow_static_auth = allow_static_auth
 
-        # Auto-detect protocol if needed and dynamic auth is enabled
-        if use_dynamic_auth and auth_method is None and auto_detect_protocol:
-            self._protocol_version = detect_protocol(host)
-            self._auth_method = get_auth_method(self._protocol_version)
-            if self._auth_method == AuthMethod.STATIC and not allow_static_auth:
-                # Dynamic auth was forced; use the oldest dynamic method.
-                self._auth_method = AuthMethod.LEGACY
-            if self._protocol_version is not None:
-                _LOGGER.info("Detected protocol version: %s -> %s", self._protocol_version, self._auth_method.value)
-            else:
-                _LOGGER.warning("Could not detect protocol. Using %s auth (will try fallback if fails)", self._auth_method.value)
-
         # Token storage
         self._storage = storage or (get_storage() if enable_persistence else None)
         self._access_token: Optional[str] = None
@@ -201,6 +207,9 @@ class VidaaTV:
         # would just multiply the connect timeout.
         self._last_connack_rc: Optional[int] = None
         self._response_event = threading.Event()
+        self._operation_lock = threading.RLock()
+        self._response_lock = threading.Lock()
+        self._expected_response_topics = set()
         self._auth_event = threading.Event()
         # Set when the TV confirms the PIN dialog is on screen, so pairing can
         # wait for that instead of assuming it worked.
@@ -308,7 +317,22 @@ class VidaaTV:
                 hours_left = saved_creds.get("access_expires_in", 0) // 3600
                 _LOGGER.debug("Using saved credentials (valid for %dh): client_id=%s...", hours_left, self._mqtt_client_id[:30])
 
+        # A paired TV already has the credentials and protocol we need.
+        # Restore them before considering UPnP: sleeping TVs cannot answer
+        # discovery, and retrying it on every reconnect wastes ~30 seconds.
         if not saved_creds:
+            # Auto-detect protocol if needed and dynamic auth is enabled
+            if use_dynamic_auth and auth_method is None and auto_detect_protocol:
+                self._protocol_version = detect_protocol(host)
+                self._auth_method = get_auth_method(self._protocol_version)
+                if self._auth_method == AuthMethod.STATIC and not allow_static_auth:
+                    # Dynamic auth was forced; use the oldest dynamic method.
+                    self._auth_method = AuthMethod.LEGACY
+                if self._protocol_version is not None:
+                    _LOGGER.info("Detected protocol version: %s -> %s", self._protocol_version, self._auth_method.value)
+                else:
+                    _LOGGER.warning("Could not detect protocol. Using %s auth (will try fallback if fails)", self._auth_method.value)
+
             method = self._auth_method
             if method is None:
                 method = AuthMethod.MODERN if use_dynamic_auth else AuthMethod.STATIC
@@ -494,6 +518,7 @@ class VidaaTV:
 
         return False
 
+    @_serialized
     def connect(self, timeout: float = 10.0, auto_auth: bool = True, auto_refresh: bool = True, try_fallback: bool = True) -> bool:
         """Connect to the TV.
 
@@ -517,6 +542,8 @@ class VidaaTV:
             self._connected = False
             self._last_connack_rc = None
 
+            # Paho's TCP timeout is separate from our CONNACK wait below.
+            self._client.connect_timeout = timeout
             self._client.connect(self.host, self.port, keepalive=DEFAULT_KEEPALIVE)
             self._client.loop_start()
 
@@ -603,6 +630,7 @@ class VidaaTV:
 
             # Try connecting
             try:
+                self._client.connect_timeout = timeout
                 self._client.connect(self.host, self.port, keepalive=DEFAULT_KEEPALIVE)
                 self._client.loop_start()
 
@@ -630,6 +658,7 @@ class VidaaTV:
         _LOGGER.error("All authentication methods failed")
         return False
 
+    @_serialized
     def disconnect(self):
         """Disconnect from the TV."""
         self._client.loop_stop()
@@ -728,10 +757,11 @@ class VidaaTV:
         self._state_unanswered = 0
         if rc == 0 or not was_connected:
             return
-        # An unexpected drop. Log it: without this, a TV that accepts the
-        # connection and then goes away looks like a stream of successful
-        # "Connected to TV" lines with nothing to explain the repetition.
-        _LOGGER.warning(
+        # Sleep commonly closes the socket or lets keepalive expire. Retain
+        # the event in the informational log without treating standby as an
+        # error. Protocol/other failures still warrant a warning.
+        log = _LOGGER.info if rc in (7, 16) else _LOGGER.warning
+        log(
             "Disconnected from %s:%s (code %s: %s)",
             self.host, self.port, rc,
             self._DISCONNECT_REASONS.get(rc, "unexpected disconnect"),
@@ -796,25 +826,20 @@ class VidaaTV:
 
         try:
             payload = json.loads(msg.payload.decode())
+            self._capture_response(msg.topic, payload)
 
             # The TV occasionally publishes bare JSON scalars (e.g. a string)
-            # instead of an object. Record it and unblock any waiter, but never
+            # instead of an object. Only unblock the matching waiter; never
             # pass it to the dict-expecting handlers below (they call .get()).
             if not isinstance(payload, dict):
                 _LOGGER.debug("Non-dict payload on %s: %r", msg.topic, payload)
-                self._last_response = payload
-                self._response_event.set()
                 return
 
             # Handle token issuance response
             if "tokenissuance" in msg.topic:
-                self._last_response = payload
-                self._response_event.set()
                 self._handle_token_response(payload)
             # Handle authentication responses (PIN verification)
             elif "authentication" in msg.topic:
-                self._last_response = payload
-                self._response_event.set()
                 self._handle_auth_response(payload)
             # Handle volume response (broadcast topic but needs response event)
             elif "/volume" in msg.topic or "volumechange" in msg.topic:
@@ -831,8 +856,6 @@ class VidaaTV:
                 elif volume_type == 2:  # Mute status (0=unmuted, 1=muted)
                     mute_val = payload.get("volume_value", 0)
                     self._cached_muted = (mute_val == 1)
-                self._last_response = payload
-                self._response_event.set()
             # A state answer, whether broadcast to everyone or addressed to us
             # directly. Matched exactly: testing for "broadcast" anywhere in the
             # topic meant ANY future broadcast subscription - hotelmodechange,
@@ -858,13 +881,8 @@ class VidaaTV:
                         self.on_auth_required()
                 if self.on_state_change:
                     self.on_state_change(payload)
-            # All other responses (device info, sources, apps, etc)
-            else:
-                self._last_response = payload
-                self._response_event.set()
         except json.JSONDecodeError:
-            self._last_response = {"raw": msg.payload.decode()}
-            self._response_event.set()
+            _LOGGER.debug("Ignoring malformed JSON on %s", msg.topic)
 
     def _handle_auth_response(self, payload: dict):
         """Handle authentication response from TV.
@@ -901,6 +919,9 @@ class VidaaTV:
 
         if access_token:
             self._access_token = access_token
+            self._refresh_token = refresh_token or self._refresh_token
+            self._password = access_token
+            self._client.username_pw_set(self._username, access_token)
             self._authenticated = True
             self._auth_required = False
 
@@ -915,7 +936,7 @@ class VidaaTV:
                     host=self.host,
                     port=self.port,
                     access_token=access_token,
-                    refresh_token=refresh_token,
+                    refresh_token=self._refresh_token,
                     access_token_duration_days=payload.get("accesstoken_duration_day", 7),
                     refresh_token_duration_days=payload.get("refreshtoken_duration_day", 30),
                     client_id=self._mqtt_client_id,  # Full MQTT client ID
@@ -975,26 +996,47 @@ class VidaaTV:
         result = self._client.publish(topic, payload)
         return result.rc == mqtt.MQTT_ERR_SUCCESS
 
-    def _request(self, topic: str, payload: Any = "", timeout: float = 5.0) -> Optional[dict]:
-        """Send a request and wait for response.
+    def _capture_response(self, topic, payload):
+        # Called by the MQTT thread: never acquire the operation lock here.
+        with self._response_lock:
+            if topic in self._expected_response_topics and not self._response_event.is_set():
+                self._last_response = payload
+                self._response_event.set()
 
-        Args:
-            topic: MQTT topic
-            payload: Message payload
-            timeout: Response timeout in seconds
-
-        Returns:
-            Response dict or None if timeout
-        """
-        self._response_event.clear()
-        self._last_response = None
-
-        if not self._publish(topic, payload):
+    @_serialized
+    def _request(self, topic: str, payload: Any = "", timeout: float = 5.0):
+        """Wait only for this request's response topics, with one waiter per TV."""
+        # Entity metadata probes are optional while the TV is asleep. Keep
+        # explicit command failures in _publish visible to their caller.
+        if not self._connected:
             return None
-
-        if self._response_event.wait(timeout):
-            return self._last_response
-        return None
+        routes = {
+            TOPIC_GET_VOLUME: (TOPIC_VOLUME_RESPONSE,
+                "/remoteapp/mobile/broadcast/platform_service/actions/volumechange"),
+            TOPIC_GET_SOURCES: (TOPIC_SOURCES_RESPONSE,),
+            TOPIC_GET_APPS: (TOPIC_APPS_RESPONSE,),
+            TOPIC_GET_TV_INFO: (TOPIC_TV_INFO_RESPONSE,),
+            TOPIC_GET_DEVICE_INFO: (TOPIC_DEVICE_INFO_RESPONSE,),
+            TOPIC_GET_CAPABILITY: (TOPIC_CAPABILITY_RESPONSE,),
+        }
+        responses = next((responses for request, responses in routes.items()
+                          if get_topic(request, self.client_id) == topic), None)
+        if responses is None:
+            raise ValueError(f"No response route for {topic}")
+        with self._response_lock:
+            self._expected_response_topics = {get_topic(t, self.client_id) for t in responses}
+            self._last_response = None
+            self._response_event.clear()
+        try:
+            if not self._publish(topic, payload):
+                return None
+            if self._response_event.wait(timeout):
+                with self._response_lock:
+                    return self._last_response
+            return None
+        finally:
+            with self._response_lock:
+                self._expected_response_topics = set()
 
     # Authentication
     def authenticate(self, pin: str, wait_for_response: bool = True, timeout: float = 10.0) -> bool:
@@ -1077,6 +1119,7 @@ class VidaaTV:
             close_topic = get_topic(TOPIC_AUTH_CLOSE, self.client_id)
             self._publish(close_topic, "")
 
+    @_serialized
     def refresh_token(self, timeout: float = 10.0) -> bool:
         """Refresh the access token using the refresh token.
 
@@ -1091,12 +1134,12 @@ class VidaaTV:
             _LOGGER.warning("Must be connected to refresh token")
             return False
 
-        self._auth_event.clear()
+        self._token_event.clear()
         _LOGGER.info("Refreshing access token...")
         self._request_token(self._refresh_token)
 
         # Wait for new token
-        if self._auth_event.wait(timeout):
+        if self._token_event.wait(timeout):
             if self._access_token:
                 _LOGGER.info("Token refreshed successfully!")
                 # Update password for future reconnections
@@ -1262,11 +1305,12 @@ class VidaaTV:
         """Toggle power."""
         return self.send_key("KEY_POWER")
 
+    @_serialized
     def power_on(self) -> bool:
         """Turn TV on (only if it's off).
 
         Returns:
-            True if command sent or TV already on
+            True if command sent or TV already on; False if its state is unknown.
         """
         state = self.get_state(timeout=3.0)
         if is_sleeping(state):
@@ -1275,8 +1319,10 @@ class VidaaTV:
             _LOGGER.debug("TV is already on.")
             return True
         else:
-            # Couldn't get state, try power anyway
-            return self.send_key("KEY_POWER")
+            # KEY_POWER is a toggle. A missing reply is not evidence of sleep;
+            # blindly sending it could turn off a TV just woken by WoL.
+            _LOGGER.debug("TV state is unknown; not toggling power")
+            return False
 
     def power_off(self) -> bool:
         """Turn TV off (only if it's on).
@@ -1452,6 +1498,7 @@ class VidaaTV:
     _MAX_STATE_MISSES = 2
     _SILENT_TV_PROBE = 0.3
 
+    @_serialized
     def get_state(self, timeout: float = 5.0) -> Optional[dict]:
         """Get TV state information.
 
@@ -1472,11 +1519,14 @@ class VidaaTV:
             TV cost the full timeout on every single call even while answering
             promptly.
         """
+        if not self._connected:
+            return None
         self._state_event.clear()
 
         # Send request to trigger state broadcast
         topic = get_topic(TOPIC_GET_STATE, self.client_id)
-        self._publish(topic, "")
+        if not self._publish(topic, ""):
+            return None
 
         # Firmware that has never answered is not going to start mid-poll, and
         # waiting the caller's full timeout for it is the single largest cost in
@@ -1538,40 +1588,17 @@ class VidaaTV:
         return self._request(topic, timeout=timeout)
 
     # Apps
+    @_serialized
     def get_apps(self, timeout: float = 5.0) -> Optional[list]:
-        """Get list of available apps.
-
-        Returns:
-            List of app dicts or None if failed
-        """
-        # Use a dedicated response capture for apps since broadcast messages
-        # can interfere with the generic _request() method
-        apps_response = []
-        apps_received = threading.Event()
-
-        def on_apps_message(client, userdata, msg):
-            nonlocal apps_response
-            if "applist" in msg.topic:
-                try:
-                    apps_response = json.loads(msg.payload.decode())
-                    apps_received.set()
-                except json.JSONDecodeError:
-                    pass
-
-        # Temporarily add callback for app list
-        apps_topic = get_topic(TOPIC_APPS_RESPONSE, self.client_id)
-        self._client.message_callback_add(apps_topic, on_apps_message)
-
-        try:
-            topic = get_topic(TOPIC_GET_APPS, self.client_id)
-            self._publish(topic, "")
-
-            if apps_received.wait(timeout):
-                return apps_response if isinstance(apps_response, list) else None
+        """Request the current app list through the permanent MQTT dispatcher."""
+        if not self._connected:
             return None
-        finally:
-            self._client.message_callback_remove(apps_topic)
+        apps = self._request(get_topic(TOPIC_GET_APPS, self.client_id), timeout=timeout)
+        if not isinstance(apps, list) or not all(isinstance(app, dict) for app in apps):
+            return None
+        return apps
 
+    @_serialized
     def launch_app(self, app_name: str, check_state: bool = False) -> bool:
         """Launch an app.
 
@@ -1596,7 +1623,7 @@ class VidaaTV:
         else:
             # Query TV for app list and find by name
             app_list = self.get_apps()
-            if app_list:
+            if app_list is not None:
                 for app in app_list:
                     if app.get("name", "").upper() == app_name.upper():
                         app_data = {
@@ -1606,11 +1633,11 @@ class VidaaTV:
                         }
                         break
                 else:
-                    _LOGGER.warning("App '%s' not found. Use get_apps() to see available apps.", app_name)
-                    return False
+                    raise AppNotFoundError(f"App {app_name!r} is not in the TV application list")
             else:
-                _LOGGER.warning("Could not get app list. Try one of: netflix, youtube, amazon, disney, hulu")
-                return False
+                if not self._connected:
+                    return False
+                raise AppListTimeoutError("The TV did not return a valid application list")
 
         topic = get_topic(TOPIC_LAUNCH_APP, self.client_id)
         return self._publish(topic, app_data)

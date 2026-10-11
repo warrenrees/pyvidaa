@@ -297,8 +297,8 @@ class TokenStorage:
 
         now = time.time()
 
-        access_expires = token_data.get("access_token_expires_at", 0)
-        refresh_expires = token_data.get("refresh_token_expires_at", 0)
+        access_expires = (token_data.get("access_token_expires_at") or 0)
+        refresh_expires = (token_data.get("refresh_token_expires_at") or 0)
 
         access_valid = not self._is_expired(access_expires)
         refresh_valid = not self._is_expired(refresh_expires)

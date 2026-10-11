@@ -347,7 +347,8 @@ def _make_client(auth_method=AuthMethod.MODERN, **kwargs):
 
 
 @pytest.mark.parametrize("raw", [b'"0509"', b"42", b"true", b'"some string"'])
-def test_on_message_tolerates_non_dict_payload(raw):
+@pytest.mark.parametrize("matching_request", [False, True])
+def test_on_message_tolerates_non_dict_payload(raw, matching_request):
     """The TV sometimes publishes bare JSON scalars on the auth topic.
 
     Regression for: AttributeError: 'str' object has no attribute 'get'.
@@ -356,12 +357,14 @@ def test_on_message_tolerates_non_dict_payload(raw):
     msg = MagicMock()
     msg.topic = "/remoteapp/mobile/auth/authentication"
     msg.payload = raw
+    if matching_request:
+        client._expected_response_topics = {msg.topic}
 
     client._on_message(None, None, msg)  # must not raise
 
     import json as _json
-    assert client._last_response == _json.loads(raw.decode())
-    assert client._response_event.is_set()
+    assert client._last_response == (_json.loads(raw.decode()) if matching_request else None)
+    assert client._response_event.is_set() is matching_request
 
 
 def test_handle_auth_response_ignores_non_dict():
@@ -1036,15 +1039,15 @@ def test_power_off_does_not_toggle_a_tv_that_is_not_answering():
     assert not any("sendkey" in topic for topic in sent)
 
 
-def test_power_on_still_sends_the_key_when_the_tv_is_silent():
-    """A silent TV is almost certainly off, and that is exactly when to wake it."""
+def test_power_on_does_not_toggle_when_the_tv_is_silent():
+    """A missing state reply must not switch off a TV that is already waking."""
     client = _make_client(auth_method=AuthMethod.STATIC)
     client._connected = True
     sent = []
     client._publish = lambda topic, payload="": sent.append(topic) or True
 
-    assert client.power_on() is True
-    assert any("sendkey" in topic for topic in sent)
+    assert client.power_on() is False
+    assert not any("sendkey" in topic for topic in sent)
 
 
 def test_disconnect_code_16_is_reported_as_a_keepalive_timeout(caplog):
@@ -1054,11 +1057,12 @@ def test_disconnect_code_16_is_reported_as_a_keepalive_timeout(caplog):
     client = _make_client(auth_method=AuthMethod.STATIC)
     client._connected = True
 
-    with caplog.at_level(logging.WARNING, logger="pyvidaa.client"):
+    with caplog.at_level(logging.INFO, logger="pyvidaa.client"):
         client._on_disconnect(None, None, 16)
 
     assert "keepalive timeout" in caplog.text
     assert "same MQTT client id" not in caplog.text
+    assert all(record.levelno < logging.WARNING for record in caplog.records)
 
 
 def test_keepalive_is_short_enough_to_notice_a_vanished_tv():
