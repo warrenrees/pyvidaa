@@ -50,6 +50,7 @@ from .topics import (
     TOPIC_GET_CAPABILITY,
     TOPIC_LAUNCH_APP,
     TOPIC_SEND_KEY,
+    TOPIC_SEND_TEXT,
     TOPIC_SET_SOURCE,
     TOPIC_SET_VOLUME,
     TOPIC_APPS_RESPONSE,
@@ -1257,6 +1258,58 @@ class VidaaTV:
 
         topic = get_topic(TOPIC_SEND_KEY, self.client_id)
         return self._publish(topic, key)
+
+    @staticmethod
+    def _literal_token(char: str) -> str:
+        """Return the ``Lit_`` token the TV expects for a single character.
+
+        Args:
+            char: A single character to type.
+
+        Returns:
+            The token to publish, e.g. ``Lit_a`` or ``Lit_SPACE``.
+        """
+        specials = {" ": "Lit_SPACE", "\n": "Lit_ENTER", "\t": "Lit_TAB"}
+        return specials.get(char, f"Lit_{char}")
+
+    def send_text(
+        self,
+        text: str,
+        delay: float = 0.2,
+        clear_first: int = 0,
+        check_state: bool = False,
+    ) -> bool:
+        """Type text into the TV's on-screen keyboard, character by character.
+
+        A text field must already be focused on the TV (its on-screen keyboard
+        visible); this types into whatever field has focus. Each character is
+        sent as its own ``Lit_<char>`` token on the remote_service ``input``
+        action, because the TV has no bulk-text command.
+
+        Args:
+            text: The text to type.
+            delay: Seconds to wait between keystrokes. Too small a value can
+                overrun the TV's input handler and drop characters.
+            clear_first: Number of backspaces to send before typing, to clear
+                an existing value.
+            check_state: If True, do nothing when the TV is off.
+
+        Returns:
+            True if every token was published successfully.
+        """
+        if check_state and not self._is_tv_on():
+            _LOGGER.debug("TV is off. Text not sent.")
+            return False
+
+        topic = get_topic(TOPIC_SEND_TEXT, self.client_id)
+        success = True
+        for _ in range(max(0, clear_first)):
+            success = self._publish(topic, "Lit_BACKSPACE") and success
+            time.sleep(delay)
+        for char in text:
+            success = self._publish(topic, self._literal_token(char)) and success
+            time.sleep(delay)
+        return success
 
     def power(self) -> bool:
         """Toggle power."""

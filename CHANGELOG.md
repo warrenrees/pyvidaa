@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `VidaaTV.send_text()` and `AsyncVidaaTV.async_send_text()` type a string into
+  the TV's focused on-screen keyboard, one `Lit_<char>` token per keystroke on
+  the new `TOPIC_SEND_TEXT` (`remote_service/.../actions/input`) action. A text
+  field must already be focused on the TV. Supports `clear_first` backspaces,
+  a per-key `delay`, and maps space/newline/tab to `Lit_SPACE`/`Lit_ENTER`/
+  `Lit_TAB`. There is no bulk-text command on the TV, so each character is sent
+  individually.
+
 ## [2.3.0] - 2026-08-04
 
 Version 2.2.7 was declared on the repository but never released; nothing was
