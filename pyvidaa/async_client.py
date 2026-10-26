@@ -380,6 +380,36 @@ class AsyncVidaaTV:
         """
         return await self._call("send_key", key, check_state=check_state)
 
+    async def async_send_text(
+        self,
+        text: str,
+        delay: float = 0.2,
+        clear_first: int = 0,
+        check_state: bool = False,
+    ) -> bool:
+        """Type text into the TV's focused on-screen keyboard.
+
+        A text field must already be focused on the TV. Each character is sent
+        as its own ``Lit_<char>`` token, because the TV has no bulk-text
+        command.
+
+        Args:
+            text: The text to type.
+            delay: Seconds to wait between keystrokes.
+            clear_first: Number of backspaces to send before typing.
+            check_state: Check TV is on first.
+
+        Returns:
+            True if every token was sent successfully.
+        """
+        return await self._call(
+            "send_text",
+            text,
+            delay=delay,
+            clear_first=clear_first,
+            check_state=check_state,
+        )
+
     async def async_power(self) -> bool:
         """Toggle power."""
         return await self._call("power")
@@ -586,6 +616,10 @@ class AsyncVidaaTV:
     def send_key(self, *args, **kwargs) -> bool:
         """Sync send_key (blocking)."""
         return self._ensure_client().send_key(*args, **kwargs)
+
+    def send_text(self, *args, **kwargs) -> bool:
+        """Sync send_text (blocking)."""
+        return self._ensure_client().send_text(*args, **kwargs)
 
     def power(self) -> bool:
         """Sync power toggle (blocking)."""

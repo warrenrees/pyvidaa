@@ -705,3 +705,21 @@ Note `livetv` carries no display name, so a consumer mapping it to a source must
 use `sourceid` (`"TV"`), which is what `sourcelist` reports as `sourcename`. That
 entry's `displayname` is `"TV Channels▶"` and matches nothing in a source list
 built from `sourcename`.
+
+### On-screen keyboard text entry — app→TV (`Lit_` tokens)
+
+**[live]** When a text field is focused on the TV (its on-screen keyboard
+showing), the app types into it by publishing one token **per keystroke** to:
+
+```
+/remoteapp/tv/remote_service/{client}/actions/input
+```
+
+The payload is the literal `Lit_<char>` — e.g. `Lit_h`, `Lit_o` — with
+`Lit_SPACE`, `Lit_BACKSPACE` and `Lit_ENTER` for the special keys. There is no
+bulk-text command: a word is a sequence of single-character publishes. A small
+delay between tokens (~0.2 s) avoids the TV's input handler dropping characters.
+
+This is the *write* side of text entry, distinct from the `txtinputdata`
+notification noted above (which is the TV→app direction). Implemented as
+`VidaaTV.send_text()` / `AsyncVidaaTV.async_send_text()`.

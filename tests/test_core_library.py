@@ -1305,3 +1305,48 @@ def test_power_on_wakes_a_sleeping_tv():
 
     assert client.power_on() is True
     assert any("sendkey" in t for t in sent)
+
+
+# --- on-screen keyboard text entry -----------------------------------------
+
+
+def _text_client():
+    """A connected static client whose _publish records what it sent."""
+    client = VidaaTV(host="10.0.0.50", use_ssl=False, **auth_mode_kwargs("static"))
+    client._connected = True
+    sent = []
+
+    def fake_publish(topic, payload=""):
+        sent.append((topic, payload))
+        return True
+
+    client._publish = fake_publish
+    return client, sent
+
+
+def test_send_text_sends_one_lit_token_per_character():
+    client, sent = _text_client()
+    assert client.send_text("hi", delay=0) is True
+    assert [p for _, p in sent] == ["Lit_h", "Lit_i"]
+    # Every keystroke goes to the remote_service input action.
+    expected = "/remote_service/" + client.client_id + "/actions/input"
+    assert all(topic.endswith(expected) for topic, _ in sent)
+
+
+def test_send_text_maps_space_and_newline_to_special_tokens():
+    client, sent = _text_client()
+    client.send_text("a b\n", delay=0)
+    assert [p for _, p in sent] == ["Lit_a", "Lit_SPACE", "Lit_b", "Lit_ENTER"]
+
+
+def test_send_text_clear_first_prepends_backspaces():
+    client, sent = _text_client()
+    client.send_text("x", delay=0, clear_first=2)
+    assert [p for _, p in sent] == ["Lit_BACKSPACE", "Lit_BACKSPACE", "Lit_x"]
+
+
+def test_send_text_off_tv_sends_nothing_when_check_state():
+    client, sent = _text_client()
+    client._is_tv_on = lambda: False
+    assert client.send_text("x", delay=0, check_state=True) is False
+    assert sent == []
